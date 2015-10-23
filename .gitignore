@@ -53,7 +53,3 @@ dkms.conf
 
 # debug information files
 *.dwo
-
-.idea/
-bin/
-obj/
