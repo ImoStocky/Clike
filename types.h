@@ -1,4 +1,3 @@
-
 /*! \file types.h
  *	\brief Compiler essential types and enums
  *	More coment here l8tr
@@ -12,14 +11,14 @@
 
 /*! \enum errv_e
  *  \brief Return codes for compiler
- *
+ *  Error codes as requred by task definition
  */
 typedef enum errv_e
 {
 	COMP_OK = 0,
 	LEX_ERR = 1,
-	SYN_ERR,
-	SEM_ERR,
+	SYN_ERR,					//!< Invalid program stucture error
+	SEM_ERR,					//!< Semantic error, undefined or redefinition of function/variable 
 	SEM_TYPE_ERR,
 	AMB_TYPE_ERR,
 	SEM_OTHER_ERR,
@@ -42,7 +41,8 @@ typedef enum token_kind_e
 	LITERAL_TK,
 	OPERATOR_TK,
 	IDENT_TK,
-	SEMICOLON_TK,
+	CONTROL_TK,
+	BRACE_TK,
 	UNKNOWN_TK
 }token_kind_t;
 
@@ -50,6 +50,7 @@ typedef enum token_kind_e
  *	\brief Ordinal values for keywords 
  *  On keyword detection scanner shall return token of kind KEYWORD_TK with 
  *  specific value from these
+ *  No need to allocate string for type of keyword that never changes
  */
 typedef enum keyword_e
 {
@@ -72,21 +73,37 @@ typedef enum keyword_e
  */
 typedef enum operator_e
 {
-	MUL_OP = 0,
-	DIV_OP,
-	PLUS_OP,
+	ASTERISK_OP = 0,		//!< "*"
+	SLASH_OP,				//!< "/"
+	PLUS_OP, 
 	MINUS_OP,
-	LESS_OP,
-	GREAT_OP,
-	LEE_OP,
-	GRE_OP,
-	EQ_OP,
-	NEQ_OP 
+	LESS_OP,				//!< "<"
+	GREAT_OP,				//!< ">"
+	LEE_OP,					//!< "<="
+	GRE_OP,					//!< ">="
+	EQ_OP,					//!< "=="
+	NEQ_OP,					//!< "!="
+	ASSIGN_OP				//!< "="
 }operator_t;
+
+/*! \enum brace_e
+ *	\brief Ordinal values for braces
+ *	On brace detection scanner shall return BRACE_TK 
+ */
+typedef enum brace_e
+{
+	BLOCKL_OP,					//!< "{"
+	BLOCKR_OP,					//!< "}"
+	BRACEL_OP,					//!< "("
+	BRACER_OP,					//!< ")"
+	SQ_BRACEL_OP,				//!< "["
+	SQ_BRACER_OP				//!< "]"
+}brace_t;
 
 /*! \struct token_s
  *	\brief Structure to represent token returned by scaner
- *
+ *	Token contains a morfing variable. Data are interpreted according to token
+ *	type
  */
 typedef struct token_s
 {
@@ -98,12 +115,13 @@ typedef struct token_s
 		char* lit;
 		keywd_t kwd;
 		operator_t oprtr;
+		brace_t brct;
+		xtable_t* symbol;
 	}data;
 }token_t;
 
 
 #define Galloc(size, ptr) ( (ptr)=malloc(size) != NULL ? 0 : exit(99), 1)
-
 
 
 
