@@ -102,7 +102,7 @@ typedef enum brace_e
 
 /*! \struct token_s
  *	\brief Structure to represent token returned by scaner
- *	Token contains a morfing variable. Data are interpreted according to token
+ *	Token contains a morfing variable. Data member is interpreted according to token
  *	type
  */
 typedef struct token_s
@@ -120,8 +120,8 @@ typedef struct token_s
 	}data;
 }token_t;
 
-
-#define Galloc(size, ptr) ( (ptr)=malloc(size) != NULL ? 0 : exit(99), 1)
+//! \brief No chceck memory allocation exit on failure
+#define Galloc(ptr, size) ( (ptr)=malloc(size) != NULL ? 0 : exit(99), 1)
 
 
 
