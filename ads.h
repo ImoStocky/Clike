@@ -1,71 +1,104 @@
-#ifndef _ADS_H
-#define _ADS_H
-
-#include <stdlib.h>
-#include <string.h>
-
-/*! \struct xstack_s
- *	\brief Stack ADS, aligned to 4B
- *	Structure describing stack data type
- *	Should behave according to ial stack signature
+/*! \file ads.c
+ *  \brief Advanced data structures module to make life easier
+ *	
+ *	This module is supposed to hold all necesay complicated data types 
+ *	for compiler machinery to work flawlessly
  */
-typedef struct xstack_s
+
+#include "ads.h"
+#include <stdbool.h>
+
+//! \define Rounds bytelen to smallest possible multiple of bytesize of boundary type
+#define aligned(bytelen, boundary)\
+	(bytelen/sizeof(boundary)+(length%sizeof(boundary) > 0 ? 1 : 0))
+
+
+int xstack_init(stack_t** st, size_t size)
 {
-	unsigned size;	//!< Size of stack in number of elements
-	unsigned top;	//!< Top of stack as offset of data member
-	uint32_t* data;	//!< Base of stack
-xstack_t;
+	if(st != NULL && *st != NULL){
+		*st = malloc(sizeof(stack_t));
+		void* tmp = malloc(aligned(size, uint32_t)*sizeof(uint32_t));
+		if(*st != NULL && tmp != NULL){
+			(*st)->size = aligned(size, uint32_t); //!< number of dwords
+			(*st)->top = 0;
+			(*st)->data = tmp;
+			return 0;
+		}
+		free(*st);
+		free(tmp);
+	}
+	return 1;
+}
 
-/*! \brief Initialize stack
- *	\param st Stack data structure
- *	\param size Size of stack to alocate
- */
-int xstack_init(stack_t* st, size_t size);
-int xstack_resize(stack_t* st, int size);
-
-/*! \biref Push data to stack
- *	\param st Stack data structure
- *	\int length Length of data in bytes
- */
-int xstack_push(xstack_t* st, void* data, int length);
-
-/*! \biref Remove data from stack
- *	\param st Stack data structure
- *	\param data General pointer
- *	\int length Length of data in bytes
- */
-int xstack_pop(xstack_t* st, int length);
-
-/*! \biref Retrieve data from to of the stack
- *	\param st Stack data structure
- *	\param data Location where to store retrieved data
- *	\int length Length of data in bytes
- */
-int xstack_top(xstack_t* st, void* data, int length);
-
-/*! \biref True if stack is empty
- *	\param st Stack data structure
- */
-bool xstack_empty(xstack_t* st);
-
-
-typedef struct xtable_s
+int xstack_resize(stack_t* st, int size)
 {
-	unsigned size;
-	unsigned population;
-	unsigned elem;
-	uint32_t* data;
-}xtable_s;
+	int ne = aligned(size, uint32_t);
+	if(st->top <= ne){
+		void* tmp = realloc(st->data, ne*sizeof(uint32_t));
+		if(tmp != NULL){
+			st->data = tmp;
+			st->size = ne;
+			return 0;
+		}
+	}
+	return 1;
+}
 
-int xtable_init(xtable_t* tab, size_t num);
-int xtable_insert(xtable_t* tab, int key, void* data);
-int xtable_delete(xtable_t* tab, int key);
-int xtable_copy(xtable_t* tab, int key, void* data);
-int xtable_resize(xtable_t* tab, size_t num, size_t elem);
-bool xtable_search(xtable_t* tab, int key);
+int xstack_push(xstack_t* st, void* data, int length)
+{
+	int ne = aligned(length, uint32_t);
+	if(st->top >= ne && st->top + ne <= st->size){
+		memcpy(st->data+st->top, data, length);
+		st->top += ne; 
+		return 0;
+	}
+	return 1;
+}
 
-#define SETb(arr, i, v) ( arr[i/bsizeof(arr[0])] = \
-		arr[i/bsizeof(arr[0])] & ~((uint64_t)1 << i%bsizeof(arr[0])) | ((-v) & (uint64_t)1 << i%bsizeof(arr[0])) ) 
-#define GETb(arr, i) ( arr[i/bsizeof(arr[0])] = arr[i/bsizeof(arr[0])] >> i%bsizeof(arr[0]) & 1 )
+int xstack_pop(xstack_t* st, int length)
+{
+	int ne = aligned(length, uint32_t);
+	if(st->top >= ne && st->top + ne <= st->size){
+		st->top -= ne;
+		return 0;
+	}
+	return 1;
+}
 
-#endif // _ADS_H
+int xstack_top(xstack_t* st, void* data, int length)
+{	
+	if(st->top >= ne && st->top + ne <= st->size){
+		memcpy(data, st->data+st->top-ne, length);
+		return 0;
+	}
+	return 1;
+}
+
+bool xstack_empty(xstack_t* st)
+{	
+	return(st->top == 0);
+}
+
+int xtable_init(xtable_t** tab, size_t num, size_t elem)
+{
+}
+
+int xtable_insert(xtable_t* tab, int key, void* data)
+{
+}
+
+bool xtable_search(xtable_t* tab, int key)
+{
+}
+
+int xtable_delete(xtable_t* tab, int key)
+{
+}
+
+int xtable_copy(xtable_t* tab, int key, void* data)
+{
+}
+
+int xtable_resize(xtable_t* tab, size_t num)
+{
+}
