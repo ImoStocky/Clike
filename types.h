@@ -77,6 +77,10 @@ typedef enum operator_e
 	SLASH_OP,				//!< "/"
 	PLUS_OP, 
 	MINUS_OP,
+	SEMI_OP, // semicolon
+	COM_OP, // comma
+	DBL_LESS_OP, // <<
+	DBL_GRE_OP, // >>
 	LESS_OP,				//!< "<"
 	GREAT_OP,				//!< ">"
 	LEE_OP,					//!< "<="
