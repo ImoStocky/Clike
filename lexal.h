@@ -50,7 +50,7 @@ typedef struct
 void scanner_init(FILE*);
 
 // nacti dalsi token
-token_t scanner_generateToken(void);
+int scanner_generateToken(token_t*);
 
 
 token_t scanner;
