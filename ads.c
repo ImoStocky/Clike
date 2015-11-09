@@ -12,6 +12,16 @@
 #define aligned(bytelen, boundary)\
 	(bytelen/sizeof(boundary)+(length%sizeof(boundary) > 0 ? 1 : 0))
 
+static uint32_t sdbm(unsigned char* str)
+{
+	uint32_t hash = 0;
+	int c;
+
+	while (c = *str++)
+		hash = c + (hash << 6) + (hash << 16) - hash;
+
+	return hash;
+}
 
 int xstack_init(stack_t** st, size_t size)
 {
@@ -79,26 +89,32 @@ bool xstack_empty(xstack_t* st)
 	return(st->top == 0);
 }
 
-int xtable_init(xtable_t** tab, size_t num, size_t elem)
+xtable_t *xtable_init(size_t size)
 {
+	
 }
 
 int xtable_insert(xtable_t* tab, int key, void* data)
 {
+	
 }
 
 bool xtable_search(xtable_t* tab, int key)
 {
+	
 }
 
 int xtable_delete(xtable_t* tab, int key)
 {
+
 }
 
 int xtable_copy(xtable_t* tab, int key, void* data)
 {
+
 }
 
 int xtable_resize(xtable_t* tab, size_t num)
 {
+
 }
