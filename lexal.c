@@ -62,7 +62,7 @@ static char * keywords[] = {
 };
 
 void scanner_init(FILE*);
-token_t scanner_generateToken(void);
+int scanner_generateToken(token_t*);
 
 static void scanner_tokenReset(void);
 static void scanner_bufferPushBack(void);
@@ -97,7 +97,7 @@ void scanner_saveStringToToken() {
 	nameWasUsed = true;
 }
 
-token_t scanner_generateToken(void)
+int scanner_generateToken(token_t* tok)
 {
 	// reinicializace tokenu
 	scanner_tokenReset();
@@ -673,7 +673,25 @@ token_t scanner_generateToken(void)
 
 	position	= 255;
 
-	return scanner;
+	if(scanner.type == UNKNOWN_TK) {
+		return 1;
+	}
+
+	memcpy (tok, &scanner, sizeof (token_t));
+
+	if(scanner.type == INT_TK) {
+		tok->data.ord = atoi(scanner.data.lit);
+	} else if(scanner.type == REAL_TK) {
+		tok->data.real = atof(scanner.data.lit);
+	} else if(scanner.type == LITERAL_TK) {
+		strcpy(tok->data.lit, scanner.data.lit);
+	} else if(scanner.type == IDENT_TK) {
+		strcpy(tok->data.lit, scanner.data.lit);
+	}
+
+	// TODO identifikator patri do symbol table, ne literal
+	
+	return 0;
 }
 
 
