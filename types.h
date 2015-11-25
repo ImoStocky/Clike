@@ -35,8 +35,15 @@ typedef enum errv_e
  */
 typedef enum token_kind_e
 {
-	END_TK = 0,
+	//EOF-LIKE TOKEN
+	END_TK = 0,	
 
+	//PRECEDENCE GRAMMAR TAGS
+	EQ_PREC,
+	LT_PREC,
+	GR_PREC,
+	NO_PREC,
+	//VALID TERMINALS
 	AUTO_KW,
 	CIN_KW,
 	COUT_KW,
@@ -48,6 +55,7 @@ typedef enum token_kind_e
 	FOR_KW,
 	RETURN_KW,
 
+	IDENT_TK,
 	INT_TK,
 	REAL_TK,
 	LITERAL_TK,
@@ -68,16 +76,33 @@ typedef enum token_kind_e
 	NEQ_OP,				//!< "!="
 	ASSIGN_OP,			//!< "="
 	
-	BLOCKL_OP,			//!< "{"
-	BLOCKR_OP,			//!< "}"
 	BRACEL_OP,			//!< "("
 	BRACER_OP,			//!< ")"
-	//SQ_BRACEL_OP,			//!< "["
-	//SQ_BRACER_OP,			//!< "]"
 
-	IDENT_TK,
+	BLOCKL_OP,			//!< "{"
+	BLOCKR_OP,			//!< "}"
+	EXPR,
 
-	UNKNOWN_TK
+	//GRAMMAR NONTERMINALS FOLLOW
+	NTS,
+	PROG,
+	PROG_N,
+	FUNC,
+	FD_PARAM,
+	FD_PARAM_N,
+	FUNC_REST,
+	STAT_BLOCK,
+	STAT_N,
+	STAT,
+	COUT_EXPR_N,
+	ID_LIST,
+	IF_BODY,
+	ELSE_OR_NOT,
+	ELSE_BODY,
+	VAR_DEF,
+	TYPE,	
+	NTE		//rule end;
+
 }token_kind_t;
 
 /*! \struct token_s
@@ -94,13 +119,11 @@ typedef struct token_s
 		int ord;
 		double real;
 		char* lit;
+		void* attr;
 	}data;
 }token_t;
 
-typedef struct var_s{
-	token_kind_t type;
-	char* ident;
-}var_t;
+
 
 //! \brief No chceck memory allocation exit on failure
 #define Galloc(ptr, size) ( (ptr)=malloc(size) != NULL ? 0 : exit(99), 1)
