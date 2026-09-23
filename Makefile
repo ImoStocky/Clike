@@ -1,16 +1,25 @@
 CC = gcc
 CFLAGS = -std=c99 -Wall -Wextra -pedantic -g
-OBJS = main.o lexal.o syntal.o str.o types.o ial.o interp.o ast.o
+BUILD_DIR = build
+TARGET = $(BUILD_DIR)/ifj
+SOURCES = main.c lexal.c syntal.c str.c types.c ial.c interp.c ast.c
+OBJECTS = $(SOURCES:%.c=$(BUILD_DIR)/%.o)
 
-.PHONY: all clean
+.PHONY: all clean test
 
-all: ifj
+all: $(TARGET)
 
-ifj: $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS)
+$(TARGET): $(OBJECTS)
+	$(CC) $(CFLAGS) -o $@ $(OBJECTS)
 
-%.o: %.c
+$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+$(BUILD_DIR):
+	mkdir -p $@
+
+test: $(TARGET)
+	IFJ_BIN="$(abspath $(TARGET))" tests/run.sh
+
 clean:
-	rm -f $(OBJS) ifj
+	rm -rf $(BUILD_DIR)

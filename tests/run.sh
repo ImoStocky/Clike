@@ -3,6 +3,7 @@
 set -u
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ifj_bin=${IFJ_BIN:-"$root/build/ifj"}
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
@@ -22,9 +23,9 @@ for source in "$root"/tests/*.src; do
 	fi
 
 	if [ -f "$input" ]; then
-		"$root/ifj" "$source" < "$input" > "$tmp"
+		"$ifj_bin" "$source" < "$input" > "$tmp"
 	else
-		"$root/ifj" "$source" < /dev/null > "$tmp"
+		"$ifj_bin" "$source" < /dev/null > "$tmp"
 	fi
 	status=$?
 

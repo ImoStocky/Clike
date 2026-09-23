@@ -15,12 +15,23 @@ typedef struct value_s
 	char *s;
 } value_t;
 
+typedef enum flow_kind_e
+{
+	FLOW_NORMAL,
+	FLOW_RETURN,
+	FLOW_THROW
+} flow_kind_t;
+
+typedef struct exec_result_s
+{
+	flow_kind_t kind;
+	value_t value;
+} exec_result_t;
+
 typedef struct frame_s
 {
 	htab_t *vars;
 	struct frame_s *parent;
-	int returned;
-	value_t ret;
 } frame_t;
 
 typedef struct func_s
@@ -66,6 +77,36 @@ static value_t v_string(char *s)
 	v.init = 1;
 	v.s = s;
 	return v;
+}
+
+static void value_destroy(value_t *v)
+{
+	if (v->type == TY_STRING)
+		free(v->s);
+	*v = v_undef();
+}
+
+static value_t value_move(value_t *v)
+{
+	value_t moved = *v;
+	*v = v_undef();
+	return moved;
+}
+
+static exec_result_t result_normal(value_t value)
+{
+	exec_result_t result;
+	result.kind = FLOW_NORMAL;
+	result.value = value;
+	return result;
+}
+
+static exec_result_t result_flow(flow_kind_t kind, value_t value)
+{
+	exec_result_t result;
+	result.kind = kind;
+	result.value = value;
+	return result;
 }
 
 static value_t *val_new(value_t src)
@@ -130,8 +171,8 @@ static int truthy(value_t v)
 	return 0;
 }
 
-static value_t eval_expr(ast_t *n);
-static void exec_stmt(ast_t *n);
+static exec_result_t eval_expr(ast_t *n);
+static exec_result_t exec_stmt(ast_t *n);
 
 static void assign_into(value_t *dst, value_t src)
 {
@@ -274,7 +315,14 @@ static int count_list(ast_t *n)
 	return c;
 }
 
-static void exec_call(ast_t *call, value_t *out)
+static void destroy_values(value_t *values, int n)
+{
+	int i;
+	for (i = 0; i < n; i++)
+		value_destroy(&values[i]);
+}
+
+static exec_result_t exec_call(ast_t *call)
 {
 	func_t *fn;
 	value_t args[32];
@@ -282,72 +330,83 @@ static void exec_call(ast_t *call, value_t *out)
 	ast_t *p;
 	frame_t *fr;
 	ast_t *param;
+	exec_result_t result;
+
 	if (call->name == NULL)
 		die(SEM_ERR);
 	fn = htab_get(functions, call->name);
 	if (fn == NULL)
 		die(SEM_ERR);
+
 	for (p = call->a; p != NULL; p = p->next)
 	{
+		exec_result_t arg;
 		if (n >= 32)
 			die(SEM_OTHER_ERR);
-		args[n++] = eval_expr(p);
+		arg = eval_expr(p);
+		if (arg.kind == FLOW_THROW)
+		{
+			destroy_values(args, n);
+			return arg;
+		}
+		args[n++] = value_move(&arg.value);
 	}
+
 	if (fn->native)
 	{
-		if (fn->nat(args, n, out) != 0)
+		value_t out = v_undef();
+		int error = fn->nat(args, n, &out);
+		destroy_values(args, n);
+		if (error != 0)
 			die(SEM_TYPE_ERR);
-		return;
+		return result_normal(out);
 	}
+
 	if (fn->def == NULL || fn->def->b == NULL)
 		die(SEM_ERR);
 	if (count_list(fn->def->a) != n)
 		die(SEM_TYPE_ERR);
+
 	{
 		frame_t *caller = cur_frame;
+		int i;
 		fr = frame_push(NULL);
 		param = fn->def->a;
+		for (i = 0; i < n; i++)
 		{
-			int i;
-			for (i = 0; i < n; i++)
-			{
-				value_t slot;
-				memset(&slot, 0, sizeof(slot));
-				slot.type = param->dtype;
-				assign_into(&slot, args[i]);
-				if (htab_put(fr->vars, param->name, val_new(slot)))
-					die(SEM_ERR);
-				if (slot.type == TY_STRING)
-					free(slot.s);
-				param = param->next;
-			}
+			value_t slot;
+			memset(&slot, 0, sizeof(slot));
+			slot.type = param->dtype;
+			assign_into(&slot, args[i]);
+			if (htab_put(fr->vars, param->name, val_new(slot)))
+				die(SEM_ERR);
+			value_destroy(&slot);
+			param = param->next;
 		}
-		exec_stmt(fn->def->b);
-		if (fr->returned)
-			*out = fr->ret;
-		else
-			*out = v_undef();
-		if (fn->def->dtype != TY_VOID && !out->init && fn->def->dtype != TY_AUTO)
-		{
-			/* missing return is allowed until value is used */
-		}
+		destroy_values(args, n);
+
+		result = exec_stmt(fn->def->b);
 		frame_pop(fr);
 		cur_frame = caller;
 	}
+
+	if (result.kind == FLOW_RETURN)
+		result.kind = FLOW_NORMAL;
+	return result;
 }
 
-static value_t eval_expr(ast_t *n)
+static exec_result_t eval_expr(ast_t *n)
 {
 	if (n == NULL)
 		die(SYN_ERR);
 	switch (n->kind)
 	{
 	case AST_INT:
-		return v_int(n->ival);
+		return result_normal(v_int(n->ival));
 	case AST_DOUBLE:
-		return v_double(n->dval);
+		return result_normal(v_double(n->dval));
 	case AST_STRING:
-		return v_string(xstrdup(n->sval ? n->sval : ""));
+		return result_normal(v_string(xstrdup(n->sval ? n->sval : "")));
 	case AST_IDENT:
 	{
 		value_t *v = lookup_var(cur_frame, n->name);
@@ -359,88 +418,134 @@ static value_t eval_expr(ast_t *n)
 		copy = *v;
 		if (v->type == TY_STRING)
 			copy.s = xstrdup(v->s ? v->s : "");
-		return copy;
+		return result_normal(copy);
 	}
 	case AST_UNOP:
 	{
-		value_t a = eval_expr(n->a);
+		exec_result_t operand = eval_expr(n->a);
+		value_t out;
+		if (operand.kind == FLOW_THROW)
+			return operand;
 		if (n->op == NOT_OP)
-			return v_int(!truthy(a));
-		if (n->op == MINUS_OP)
+			out = v_int(!truthy(operand.value));
+		else if (n->op == MINUS_OP)
 		{
-			if (!a.init)
+			if (!operand.value.init)
 				die(RT_NO_INIT_ERR);
-			if (a.type == TY_INT)
-				return v_int(-a.i);
-			if (a.type == TY_DOUBLE)
-				return v_double(-a.d);
-			die(SEM_TYPE_ERR);
+			if (operand.value.type == TY_INT)
+				out = v_int(-operand.value.i);
+			else if (operand.value.type == TY_DOUBLE)
+				out = v_double(-operand.value.d);
+			else
+				die(SEM_TYPE_ERR);
 		}
-		die(SYN_ERR);
-		break;
+		else
+		{
+			die(SYN_ERR);
+			out = v_undef();
+		}
+		value_destroy(&operand.value);
+		return result_normal(out);
 	}
 	case AST_BINOP:
 	{
-		value_t a, b;
+		exec_result_t left = eval_expr(n->a);
+		exec_result_t right;
+		value_t out;
+		int condition;
+		if (left.kind == FLOW_THROW)
+			return left;
+
 		if (n->op == AND_OP)
 		{
-			a = eval_expr(n->a);
-			if (!truthy(a))
-				return v_int(0);
-			b = eval_expr(n->b);
-			return v_int(truthy(b));
+			condition = truthy(left.value);
+			value_destroy(&left.value);
+			if (!condition)
+				return result_normal(v_int(0));
+			right = eval_expr(n->b);
+			if (right.kind == FLOW_THROW)
+				return right;
+			out = v_int(truthy(right.value));
+			value_destroy(&right.value);
+			return result_normal(out);
 		}
 		if (n->op == OR_OP)
 		{
-			a = eval_expr(n->a);
-			if (truthy(a))
-				return v_int(1);
-			b = eval_expr(n->b);
-			return v_int(truthy(b));
+			condition = truthy(left.value);
+			value_destroy(&left.value);
+			if (condition)
+				return result_normal(v_int(1));
+			right = eval_expr(n->b);
+			if (right.kind == FLOW_THROW)
+				return right;
+			out = v_int(truthy(right.value));
+			value_destroy(&right.value);
+			return result_normal(out);
 		}
-		a = eval_expr(n->a);
-		b = eval_expr(n->b);
-		return num_bin(n->op, a, b);
+
+		right = eval_expr(n->b);
+		if (right.kind == FLOW_THROW)
+		{
+			value_destroy(&left.value);
+			return right;
+		}
+		out = num_bin(n->op, left.value, right.value);
+		value_destroy(&left.value);
+		value_destroy(&right.value);
+		return result_normal(out);
 	}
 	case AST_CALL:
 	{
-		value_t out = v_undef();
-		exec_call(n, &out);
-		if (!out.init)
+		exec_result_t result = exec_call(n);
+		if (result.kind == FLOW_THROW)
+			return result;
+		if (!result.value.init)
 			die(RT_NO_INIT_ERR);
-		return out;
+		return result;
 	}
 	default:
 		die(SYN_ERR);
 	}
-	return v_undef();
+	return result_normal(v_undef());
 }
 
-static void exec_vardecl(ast_t *n)
+static exec_result_t exec_vardecl(ast_t *n)
 {
 	value_t slot;
 	memset(&slot, 0, sizeof(slot));
 	slot.type = n->dtype;
 	if (n->a != NULL)
-		assign_into(&slot, eval_expr(n->a));
+	{
+		exec_result_t init = eval_expr(n->a);
+		if (init.kind == FLOW_THROW)
+			return init;
+		assign_into(&slot, init.value);
+		value_destroy(&init.value);
+	}
 	else if (n->dtype == TY_AUTO)
 		die(AMB_TYPE_ERR);
 	if (htab_get(cur_frame->vars, n->name) != NULL)
 		die(SEM_ERR);
 	htab_put(cur_frame->vars, n->name, val_new(slot));
-	if (slot.type == TY_STRING)
-		free(slot.s);
+	value_destroy(&slot);
+	return result_normal(v_undef());
 }
 
-static void exec_assign(ast_t *n)
+static exec_result_t exec_assign(ast_t *n)
 {
 	value_t *dst = lookup_var(cur_frame, n->name);
+	exec_result_t value;
 	if (dst == NULL)
 		die(SEM_ERR);
-	assign_into(dst, eval_expr(n->a));
+	value = eval_expr(n->a);
+	if (value.kind == FLOW_THROW)
+		return value;
+	assign_into(dst, value.value);
+	value_destroy(&value.value);
+	return result_normal(v_undef());
 }
 
-static void exec_cin(ast_t *n)
+static exec_result_t exec_cin(ast_t *n)
 {
 	ast_t *id;
 	for (id = n->a; id != NULL; id = id->next)
@@ -478,121 +583,185 @@ static void exec_cin(ast_t *n)
 		else
 			die(SEM_TYPE_ERR);
 	}
+	return result_normal(v_undef());
 }
 
-static void exec_cout(ast_t *n)
+static exec_result_t exec_cout(ast_t *n)
 {
 	ast_t *e;
 	for (e = n->a; e != NULL; e = e->next)
 	{
-		value_t v = eval_expr(e);
-		if (!v.init)
+		exec_result_t result = eval_expr(e);
+		value_t *v;
+		if (result.kind == FLOW_THROW)
+			return result;
+		v = &result.value;
+		if (!v->init)
 			die(RT_NO_INIT_ERR);
-		if (v.type == TY_INT)
-			printf("%d", v.i);
-		else if (v.type == TY_DOUBLE)
-			printf("%g", v.d);
-		else if (v.type == TY_STRING)
-			fputs(v.s ? v.s : "", stdout);
+		if (v->type == TY_INT)
+			printf("%d", v->i);
+		else if (v->type == TY_DOUBLE)
+			printf("%g", v->d);
+		else if (v->type == TY_STRING)
+			fputs(v->s ? v->s : "", stdout);
 		else
 			die(SEM_TYPE_ERR);
-		if (v.type == TY_STRING)
-			free(v.s);
+		value_destroy(v);
 	}
+	return result_normal(v_undef());
 }
 
-static void exec_stmt(ast_t *n)
+static exec_result_t exec_stmt(ast_t *n)
 {
-	if (n == NULL || (cur_frame && cur_frame->returned))
-		return;
+	if (n == NULL)
+		return result_normal(v_undef());
 	switch (n->kind)
 	{
 	case AST_BLOCK:
 	{
 		frame_t *inner = frame_push(cur_frame);
 		ast_t *s;
-		for (s = n->a; s != NULL && !inner->returned; s = s->next)
-			exec_stmt(s);
-		if (inner->returned)
-		{
-			cur_frame->parent->returned = 1;
-			cur_frame->parent->ret = inner->ret;
-		}
+		exec_result_t result = result_normal(v_undef());
+		for (s = n->a; s != NULL && result.kind == FLOW_NORMAL; s = s->next)
+			result = exec_stmt(s);
 		frame_pop(inner);
-		break;
+		return result;
 	}
 	case AST_VARDECL:
-		exec_vardecl(n);
-		break;
+		return exec_vardecl(n);
 	case AST_ASSIGN:
-		exec_assign(n);
-		break;
+		return exec_assign(n);
 	case AST_CIN:
-		exec_cin(n);
-		break;
+		return exec_cin(n);
 	case AST_COUT:
-		exec_cout(n);
-		break;
+		return exec_cout(n);
 	case AST_RETURN:
 	{
 		if (n->a != NULL)
-			cur_frame->ret = eval_expr(n->a);
-		else
-			cur_frame->ret = v_undef();
-		cur_frame->returned = 1;
-		break;
+		{
+			exec_result_t value = eval_expr(n->a);
+			if (value.kind == FLOW_THROW)
+				return value;
+			return result_flow(FLOW_RETURN, value_move(&value.value));
+		}
+		return result_flow(FLOW_RETURN, v_undef());
+	}
+	case AST_THROW:
+	{
+		exec_result_t value = eval_expr(n->a);
+		if (value.kind == FLOW_THROW)
+			return value;
+		if (!value.value.init)
+			die(RT_NO_INIT_ERR);
+		if (value.value.type != TY_STRING)
+		{
+			value_destroy(&value.value);
+			die(SEM_TYPE_ERR);
+		}
+		return result_flow(FLOW_THROW, value_move(&value.value));
+	}
+	case AST_TRY:
+	{
+		exec_result_t result = exec_stmt(n->a);
+		if (result.kind == FLOW_THROW)
+		{
+			frame_t *catch_frame = frame_push(cur_frame);
+			value_t *caught = xmalloc(sizeof(*caught));
+			*caught = value_move(&result.value);
+			if (htab_put(catch_frame->vars, n->name, caught))
+				die(SEM_ERR);
+			result = exec_stmt(n->b);
+			frame_pop(catch_frame);
+		}
+		return result;
 	}
 	case AST_IF:
-		if (truthy(eval_expr(n->a)))
-			exec_stmt(n->b);
-		else
-			exec_stmt(n->c);
-		break;
+	{
+		exec_result_t condition = eval_expr(n->a);
+		int take_then;
+		if (condition.kind == FLOW_THROW)
+			return condition;
+		take_then = truthy(condition.value);
+		value_destroy(&condition.value);
+		return exec_stmt(take_then ? n->b : n->c);
+	}
 	case AST_WHILE:
-		while (!cur_frame->returned && truthy(eval_expr(n->a)))
-			exec_stmt(n->b);
-		break;
+		for (;;)
+		{
+			exec_result_t condition = eval_expr(n->a);
+			exec_result_t body;
+			int keep_going;
+			if (condition.kind == FLOW_THROW)
+				return condition;
+			keep_going = truthy(condition.value);
+			value_destroy(&condition.value);
+			if (!keep_going)
+				return result_normal(v_undef());
+			body = exec_stmt(n->b);
+			if (body.kind != FLOW_NORMAL)
+				return body;
+		}
 	case AST_DO:
-		do
-			exec_stmt(n->a);
-		while (!cur_frame->returned && truthy(eval_expr(n->b)));
-		break;
+		for (;;)
+		{
+			exec_result_t body = exec_stmt(n->a);
+			exec_result_t condition;
+			int keep_going;
+			if (body.kind != FLOW_NORMAL)
+				return body;
+			condition = eval_expr(n->b);
+			if (condition.kind == FLOW_THROW)
+				return condition;
+			keep_going = truthy(condition.value);
+			value_destroy(&condition.value);
+			if (!keep_going)
+				return result_normal(v_undef());
+		}
 	case AST_FOR:
 	{
 		frame_t *inner = frame_push(cur_frame);
-		if (n->a)
-			exec_stmt(n->a);
-		while (!inner->returned && (n->b == NULL || truthy(eval_expr(n->b))))
+		exec_result_t result = result_normal(v_undef());
+		if (n->a != NULL)
+			result = exec_stmt(n->a);
+		while (result.kind == FLOW_NORMAL)
 		{
-			exec_stmt(n->d);
-			if (inner->returned)
+			if (n->b != NULL)
+			{
+				exec_result_t condition = eval_expr(n->b);
+				int keep_going;
+				if (condition.kind == FLOW_THROW)
+				{
+					result = condition;
+					break;
+				}
+				keep_going = truthy(condition.value);
+				value_destroy(&condition.value);
+				if (!keep_going)
+					break;
+			}
+			result = exec_stmt(n->d);
+			if (result.kind != FLOW_NORMAL)
 				break;
-			if (n->c)
-				exec_stmt(n->c);
-		}
-		if (inner->returned)
-		{
-			cur_frame->parent->returned = 1;
-			cur_frame->parent->ret = inner->ret;
+			if (n->c != NULL)
+				result = exec_stmt(n->c);
 		}
 		frame_pop(inner);
-		break;
+		return result;
 	}
 	case AST_EXPRSTMT:
 		if (n->a != NULL)
 		{
-			value_t v = v_undef();
-			if (n->a->kind == AST_CALL)
-				exec_call(n->a, &v);
-			else
-				v = eval_expr(n->a);
-			if (v.type == TY_STRING)
-				free(v.s);
+			exec_result_t result = n->a->kind == AST_CALL
+				? exec_call(n->a) : eval_expr(n->a);
+			if (result.kind == FLOW_THROW)
+				return result;
+			value_destroy(&result.value);
 		}
-		break;
+		return result_normal(v_undef());
 	default:
 		die(SYN_ERR);
 	}
+	return result_normal(v_undef());
 }
 
 static int nat_length(value_t *args, int n, value_t *out)
@@ -700,8 +869,8 @@ void interpret(ast_t *prog)
 {
 	ast_t *f;
 	func_t *mainfn;
-	value_t dummy;
 	ast_t call;
+	exec_result_t result;
 	functions = htab_init(64);
 	add_native("length", nat_length);
 	add_native("concat", nat_concat);
@@ -721,7 +890,11 @@ void interpret(ast_t *prog)
 	memset(&call, 0, sizeof(call));
 	call.kind = AST_CALL;
 	call.name = "main";
-	exec_call(&call, &dummy);
-	if (dummy.type == TY_STRING)
-		free(dummy.s);
+	result = exec_call(&call);
+	if (result.kind == FLOW_THROW)
+	{
+		value_destroy(&result.value);
+		die(RT_OTHER_ERR);
+	}
+	value_destroy(&result.value);
 }
