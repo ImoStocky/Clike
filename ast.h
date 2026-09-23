@@ -3,6 +3,8 @@
 
 #include "types.h"
 
+typedef struct compiler_s compiler_t;
+
 typedef enum ast_kind_e
 {
 	AST_PROG,
@@ -44,9 +46,14 @@ typedef struct ast_s
 	struct ast_s *c;
 	struct ast_s *d;
 	struct ast_s *next;
+	struct ast_s *track;
 } ast_t;
 
-ast_t *ast_new(ast_kind_t kind);
+ast_t *ast_try_body(ast_t *node);
+ast_t *ast_try_handler(ast_t *node);
+ast_t *ast_throw_expr(ast_t *node);
+
+ast_t *ast_new(compiler_t *c, ast_kind_t kind);
 void ast_append(ast_t **head, ast_t *node);
 void ast_free(ast_t *node);
 

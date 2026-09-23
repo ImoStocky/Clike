@@ -7,27 +7,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-static FILE *sourceFile;
-static string buf;
-static int have_unread;
-static int unread_c;
-
-static int next_char(void)
+static int next_char(scanner_t *s)
 {
-	if (have_unread)
+	if (s->have_unread)
 	{
-		have_unread = 0;
-		return unread_c;
+		s->have_unread = 0;
+		return s->unread_c;
 	}
-	return getc(sourceFile);
+	return getc(s->file);
 }
 
-static void push_char(int c)
+static void push_char(scanner_t *s, int c)
 {
 	if (c == EOF)
 		return;
-	have_unread = 1;
-	unread_c = c;
+	s->have_unread = 1;
+	s->unread_c = c;
 }
 
 static int hex_val(int c)
@@ -61,47 +56,52 @@ static token_kind_t keyword_kind(const char *s)
 	return IDENT_TK;
 }
 
-void scanner_init(FILE *file)
+errv_t scanner_init(scanner_t *scanner, FILE *file)
 {
-	sourceFile = file;
-	have_unread = 0;
-	if (strInit(&buf) != 0)
-		die(INTER_ERR);
+	memset(scanner, 0, sizeof(*scanner));
+	scanner->file = file;
+	if (strInit(&scanner->buf) != 0)
+		return INTER_ERR;
+	scanner->active = 1;
+	return COMP_OK;
 }
 
-void scanner_destroy(void)
+void scanner_destroy(scanner_t *scanner)
 {
-	strFree(&buf);
-	buf.str = NULL;
+	if (scanner == NULL || !scanner->active)
+		return;
+	strFree(&scanner->buf);
+	scanner->buf.str = NULL;
+	scanner->active = 0;
 }
 
-static void skip_line_comment(void)
+static void skip_line_comment(scanner_t *s)
 {
 	int c;
 	for (;;)
 	{
-		c = next_char();
+		c = next_char(s);
 		if (c == EOF || c == '\n')
 			return;
 	}
 }
 
-static void skip_block_comment(void)
+static errv_t skip_block_comment(scanner_t *s)
 {
 	int c;
 	int star = 0;
 	for (;;)
 	{
-		c = next_char();
+		c = next_char(s);
 		if (c == EOF)
-			die(LEX_ERR);
+			return LEX_ERR;
 		if (star && c == '/')
-			return;
+			return COMP_OK;
 		star = (c == '*');
 	}
 }
 
-int scanner_generateToken(token_t *tok)
+errv_t scanner_generateToken(scanner_t *s, token_t *tok)
 {
 	int c;
 
@@ -110,146 +110,147 @@ int scanner_generateToken(token_t *tok)
 
 	for (;;)
 	{
-		c = next_char();
+		c = next_char(s);
 		if (c == EOF)
 		{
 			tok->type = END_TK;
-			return 0;
+			return COMP_OK;
 		}
 		if (isspace(c))
 			continue;
 		if (c == '/')
 		{
-			int n = next_char();
+			int n = next_char(s);
 			if (n == '/')
 			{
-				skip_line_comment();
+				skip_line_comment(s);
 				continue;
 			}
 			if (n == '*')
 			{
-				skip_block_comment();
+				if (skip_block_comment(s) != COMP_OK)
+				return LEX_ERR;
 				continue;
 			}
-			push_char(n);
+			push_char(s, n);
 			tok->type = SLASH_OP;
-			return 0;
+			return COMP_OK;
 		}
 		break;
 	}
 
 	if (isalpha(c) || c == '_')
 	{
-		strClear(&buf);
-		if (strAddChar(&buf, (char)c) != 0)
-			die(INTER_ERR);
+		strClear(&s->buf);
+		if (strAddChar(&s->buf, (char)c) != 0)
+			return INTER_ERR;
 		for (;;)
 		{
-			c = next_char();
+			c = next_char(s);
 			if (!(isalnum(c) || c == '_'))
 			{
-				push_char(c);
+				push_char(s, c);
 				break;
 			}
-			if (strAddChar(&buf, (char)c) != 0)
-				die(INTER_ERR);
+			if (strAddChar(&s->buf, (char)c) != 0)
+				return INTER_ERR;
 		}
-		tok->type = keyword_kind(buf.str);
+		tok->type = keyword_kind(s->buf.str);
 		if (tok->type == IDENT_TK)
-			tok->data.lit = xstrdup(buf.str);
-		return 0;
+			tok->data.lit = xstrdup(s->buf.str);
+		return COMP_OK;
 	}
 
 	if (isdigit(c))
 	{
 		int is_real = 0;
-		strClear(&buf);
-		if (strAddChar(&buf, (char)c) != 0)
-			die(INTER_ERR);
+		strClear(&s->buf);
+		if (strAddChar(&s->buf, (char)c) != 0)
+			return INTER_ERR;
 		for (;;)
 		{
-			c = next_char();
+			c = next_char(s);
 			if (isdigit(c))
 			{
-				if (strAddChar(&buf, (char)c) != 0)
-					die(INTER_ERR);
+				if (strAddChar(&s->buf, (char)c) != 0)
+					return INTER_ERR;
 				continue;
 			}
 			break;
 		}
 		if (c == '.')
 		{
-			int d = next_char();
+			int d = next_char(s);
 			if (!isdigit(d))
-				die(LEX_ERR);
+				return LEX_ERR;
 			is_real = 1;
-			if (strAddChar(&buf, '.') != 0 || strAddChar(&buf, (char)d) != 0)
-				die(INTER_ERR);
+			if (strAddChar(&s->buf, '.') != 0 || strAddChar(&s->buf, (char)d) != 0)
+				return INTER_ERR;
 			for (;;)
 			{
-				c = next_char();
+				c = next_char(s);
 				if (!isdigit(c))
 					break;
-				if (strAddChar(&buf, (char)c) != 0)
-					die(INTER_ERR);
+				if (strAddChar(&s->buf, (char)c) != 0)
+					return INTER_ERR;
 			}
 		}
 		if (c == 'e' || c == 'E')
 		{
 			int d;
 			is_real = 1;
-			if (strAddChar(&buf, (char)c) != 0)
-				die(INTER_ERR);
-			d = next_char();
+			if (strAddChar(&s->buf, (char)c) != 0)
+				return INTER_ERR;
+			d = next_char(s);
 			if (d == '+' || d == '-')
 			{
-				if (strAddChar(&buf, (char)d) != 0)
-					die(INTER_ERR);
-				d = next_char();
+				if (strAddChar(&s->buf, (char)d) != 0)
+					return INTER_ERR;
+				d = next_char(s);
 			}
 			if (!isdigit(d))
-				die(LEX_ERR);
-			if (strAddChar(&buf, (char)d) != 0)
-				die(INTER_ERR);
+				return LEX_ERR;
+			if (strAddChar(&s->buf, (char)d) != 0)
+				return INTER_ERR;
 			for (;;)
 			{
-				c = next_char();
+				c = next_char(s);
 				if (!isdigit(c))
 					break;
-				if (strAddChar(&buf, (char)c) != 0)
-					die(INTER_ERR);
+				if (strAddChar(&s->buf, (char)c) != 0)
+					return INTER_ERR;
 			}
-			push_char(c);
+			push_char(s, c);
 		}
 		else
-			push_char(c);
+			push_char(s, c);
 
 		if (is_real)
 		{
 			tok->type = REAL_TK;
-			tok->data.real = atof(buf.str);
+			tok->data.real = atof(s->buf.str);
 		}
 		else
 		{
 			tok->type = INT_TK;
-			tok->data.ord = atoi(buf.str);
+			tok->data.ord = atoi(s->buf.str);
 		}
-		return 0;
+		return COMP_OK;
 	}
 
 	if (c == '"')
 	{
-		strClear(&buf);
+		strClear(&s->buf);
 		for (;;)
 		{
-			c = next_char();
+			c = next_char(s);
 			if (c == EOF || c == '\n')
-				die(LEX_ERR);
+				return LEX_ERR;
 			if (c == '"')
 				break;
 			if (c == '\\')
 			{
-				int e = next_char();
+				int e = next_char(s);
 				if (e == 'n')
 					c = '\n';
 				else if (e == 't')
@@ -260,111 +261,111 @@ int scanner_generateToken(token_t *tok)
 					c = '"';
 				else if (e == 'x')
 				{
-					int h1 = next_char();
-					int h2 = next_char();
+					int h1 = next_char(s);
+					int h2 = next_char(s);
 					int v1 = hex_val(h1);
 					int v2 = hex_val(h2);
 					if (v1 < 0 || v2 < 0)
-						die(LEX_ERR);
+						return LEX_ERR;
 					c = (v1 << 4) | v2;
 					if (c == 0)
-						die(LEX_ERR);
+						return LEX_ERR;
 				}
 				else
-					die(LEX_ERR);
+					return LEX_ERR;
 			}
 			else if (c < 32)
-				die(LEX_ERR);
-			if (strAddChar(&buf, (char)c) != 0)
-				die(INTER_ERR);
+				return LEX_ERR;
+			if (strAddChar(&s->buf, (char)c) != 0)
+				return INTER_ERR;
 		}
 		tok->type = LITERAL_TK;
-		tok->data.lit = xstrdup(buf.str);
-		return 0;
+		tok->data.lit = xstrdup(s->buf.str);
+		return COMP_OK;
 	}
 
 	switch (c)
 	{
-	case '+': tok->type = PLUS_OP; return 0;
-	case '-': tok->type = MINUS_OP; return 0;
-	case '*': tok->type = ASTERISK_OP; return 0;
-	case '%': tok->type = PERCENT_OP; return 0;
-	case ';': tok->type = SEMI_OP; return 0;
-	case ',': tok->type = COM_OP; return 0;
-	case '(': tok->type = BRACEL_OP; return 0;
-	case ')': tok->type = BRACER_OP; return 0;
-	case '{': tok->type = BLOCKL_OP; return 0;
-	case '}': tok->type = BLOCKR_OP; return 0;
+	case '+': tok->type = PLUS_OP; return COMP_OK;
+	case '-': tok->type = MINUS_OP; return COMP_OK;
+	case '*': tok->type = ASTERISK_OP; return COMP_OK;
+	case '%': tok->type = PERCENT_OP; return COMP_OK;
+	case ';': tok->type = SEMI_OP; return COMP_OK;
+	case ',': tok->type = COM_OP; return COMP_OK;
+	case '(': tok->type = BRACEL_OP; return COMP_OK;
+	case ')': tok->type = BRACER_OP; return COMP_OK;
+	case '{': tok->type = BLOCKL_OP; return COMP_OK;
+	case '}': tok->type = BLOCKR_OP; return COMP_OK;
 	case '!':
 	{
-		int n = next_char();
+		int n = next_char(s);
 		if (n == '=')
 			tok->type = NEQ_OP;
 		else
 		{
-			push_char(n);
+			push_char(s, n);
 			tok->type = NOT_OP;
 		}
-		return 0;
+		return COMP_OK;
 	}
 	case '=':
 	{
-		int n = next_char();
+		int n = next_char(s);
 		if (n == '=')
 			tok->type = EQ_OP;
 		else
 		{
-			push_char(n);
+			push_char(s, n);
 			tok->type = ASSIGN_OP;
 		}
-		return 0;
+		return COMP_OK;
 	}
 	case '<':
 	{
-		int n = next_char();
+		int n = next_char(s);
 		if (n == '<')
 			tok->type = DBL_LESS_OP;
 		else if (n == '=')
 			tok->type = LEE_OP;
 		else
 		{
-			push_char(n);
+			push_char(s, n);
 			tok->type = LESS_OP;
 		}
-		return 0;
+		return COMP_OK;
 	}
 	case '>':
 	{
-		int n = next_char();
+		int n = next_char(s);
 		if (n == '>')
 			tok->type = DBL_GRE_OP;
 		else if (n == '=')
 			tok->type = GRE_OP;
 		else
 		{
-			push_char(n);
+			push_char(s, n);
 			tok->type = GREAT_OP;
 		}
-		return 0;
+		return COMP_OK;
 	}
 	case '&':
 	{
-		int n = next_char();
+		int n = next_char(s);
 		if (n != '&')
-			die(LEX_ERR);
+			return LEX_ERR;
 		tok->type = AND_OP;
-		return 0;
+		return COMP_OK;
 	}
 	case '|':
 	{
-		int n = next_char();
+		int n = next_char(s);
 		if (n != '|')
-			die(LEX_ERR);
+			return LEX_ERR;
 		tok->type = OR_OP;
-		return 0;
+		return COMP_OK;
 	}
 	default:
-		die(LEX_ERR);
+		return LEX_ERR;
 	}
-	return 1;
+	return LEX_ERR;
 }
