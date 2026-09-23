@@ -306,32 +306,34 @@ static void exec_call(ast_t *call, value_t *out)
 	{
 		frame_t *caller = cur_frame;
 		fr = frame_push(NULL);
-	param = fn->def->a;
-	{
-		int i;
-		for (i = 0; i < n; i++)
+		param = fn->def->a;
 		{
-			value_t slot;
-			memset(&slot, 0, sizeof(slot));
-			slot.type = param->dtype;
-			assign_into(&slot, args[i]);
-			if (htab_put(fr->vars, param->name, val_new(slot)))
-				die(SEM_ERR);
-			if (slot.type == TY_STRING)
-				free(slot.s);
-			param = param->next;
+			int i;
+			for (i = 0; i < n; i++)
+			{
+				value_t slot;
+				memset(&slot, 0, sizeof(slot));
+				slot.type = param->dtype;
+				assign_into(&slot, args[i]);
+				if (htab_put(fr->vars, param->name, val_new(slot)))
+					die(SEM_ERR);
+				if (slot.type == TY_STRING)
+					free(slot.s);
+				param = param->next;
+			}
 		}
+		exec_stmt(fn->def->b);
+		if (fr->returned)
+			*out = fr->ret;
+		else
+			*out = v_undef();
+		if (fn->def->dtype != TY_VOID && !out->init && fn->def->dtype != TY_AUTO)
+		{
+			/* missing return is allowed until value is used */
+		}
+		frame_pop(fr);
+		cur_frame = caller;
 	}
-	exec_stmt(fn->def->b);
-	if (fr->returned)
-		*out = fr->ret;
-	else
-		*out = v_undef();
-	if (fn->def->dtype != TY_VOID && !out->init && fn->def->dtype != TY_AUTO)
-	{
-		/* missing return is allowed until value is used */
-	}
-	frame_pop(fr);
 }
 
 static value_t eval_expr(ast_t *n)
@@ -579,7 +581,11 @@ static void exec_stmt(ast_t *n)
 	case AST_EXPRSTMT:
 		if (n->a != NULL)
 		{
-			value_t v = eval_expr(n->a);
+			value_t v = v_undef();
+			if (n->a->kind == AST_CALL)
+				exec_call(n->a, &v);
+			else
+				v = eval_expr(n->a);
 			if (v.type == TY_STRING)
 				free(v.s);
 		}
