@@ -1,0 +1,52 @@
+string mark(string flags, int index, string bit)
+{
+	int len = length(flags);
+	return concat(concat(substr(flags, 0, index), bit), substr(flags, index + 1, len - index - 1));
+}
+
+int count_primes(int n)
+{
+	string flags = "";
+	int i = 0;
+	int p;
+	int count;
+
+	while (i <= n)
+	{
+		flags = concat(flags, "1");
+		i = i + 1;
+	}
+	flags = mark(flags, 0, "0");
+	flags = mark(flags, 1, "0");
+
+	p = 2;
+	while (p * p <= n)
+	{
+		if (substr(flags, p, 1) == "1")
+		{
+			i = p * p;
+			while (i <= n)
+			{
+				flags = mark(flags, i, "0");
+				i = i + p;
+			}
+		}
+		p = p + 1;
+	}
+
+	count = 0;
+	i = 2;
+	while (i <= n)
+	{
+		if (substr(flags, i, 1) == "1")
+			count = count + 1;
+		i = i + 1;
+	}
+	return count;
+}
+
+int main()
+{
+	cout << count_primes(20000) << "\n";
+	return 0;
+}
