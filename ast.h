@@ -15,6 +15,8 @@ typedef enum ast_kind_e
 	AST_WHILE,
 	AST_DO,
 	AST_RETURN,
+	AST_TRY,
+	AST_THROW,
 	AST_ASSIGN,
 	AST_CIN,
 	AST_COUT,

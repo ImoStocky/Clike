@@ -55,6 +55,9 @@ static token_kind_t keyword_kind(const char *s)
 	if (strcmp(s, "string") == 0) return STRING_KW;
 	if (strcmp(s, "while") == 0) return WHILE_KW;
 	if (strcmp(s, "do") == 0) return DO_KW;
+	if (strcmp(s, "try") == 0) return TRY_KW;
+	if (strcmp(s, "catch") == 0) return CATCH_KW;
+	if (strcmp(s, "throw") == 0) return THROW_KW;
 	return IDENT_TK;
 }
 

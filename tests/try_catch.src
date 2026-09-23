@@ -1,0 +1,20 @@
+int divide(int a, int b)
+{
+	if (b == 0)
+		throw "division by zero";
+	return a / b;
+}
+
+int main()
+{
+	try
+	{
+		cout << divide(10, 0) << "\n";
+	}
+	catch (string error)
+	{
+		cout << "caught: " << error << "\n";
+	}
+
+	return 0;
+}

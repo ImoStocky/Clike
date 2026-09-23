@@ -16,7 +16,7 @@ always binding else to the nearest if (prefer the else alternative over eps).
 Tokens (terminals)
 ------------------
   type keywords:  auto  int  double  string
-  control:        if  else  for  while  do  return  cin  cout
+  control:        if  else  for  while  do  return  try  catch  throw  cin  cout
   literals:       INT  REAL  STRING
   id
   operators:      + - * / %  == != < > <= >=  && || !  =  << >>
@@ -63,38 +63,40 @@ because FUNC is only derived from PROG.
  17   STAT        -> for ( FOR_INIT EXPR_OPT ; FOR_ITER ) STAT
  18   STAT        -> while ( EXPR ) STAT
  19   STAT        -> do STAT while ( EXPR ) ;
- 20   STAT        -> return EXPR_OPT ;
- 21   STAT        -> cin >> id ID_LIST
- 22   STAT        -> cout << EXPR COUT_TAIL
- 23   STAT        -> id STAT_ID                   /* factor id */
+ 20   STAT        -> try STAT catch ( string id ) STAT
+ 21   STAT        -> throw EXPR ;
+ 22   STAT        -> return EXPR_OPT ;
+ 23   STAT        -> cin >> id ID_LIST
+ 24   STAT        -> cout << EXPR COUT_TAIL
+ 25   STAT        -> id STAT_ID                   /* factor id */
 
- 24   STAT_ID     -> = EXPR ;
- 25   STAT_ID     -> ( ARGS ) ;
+ 26   STAT_ID     -> = EXPR ;
+ 27   STAT_ID     -> ( ARGS ) ;
 
- 26   ELSE_OPT    -> else STAT
- 27   ELSE_OPT    -> eps                          FOLLOW = FIRST(STAT) U { } , $ }
+ 28   ELSE_OPT    -> else STAT
+ 29   ELSE_OPT    -> eps                          FOLLOW = FIRST(STAT) U { } , $ }
                                                     minus { else }
 
- 28   VAR_DEF     -> eps                          FOLLOW = { ; }
- 29   VAR_DEF     -> = EXPR
+ 30   VAR_DEF     -> eps                          FOLLOW = { ; }
+ 31   VAR_DEF     -> = EXPR
 
- 30   FOR_INIT    -> TYPE id VAR_DEF ;
- 31   FOR_INIT    -> id = EXPR ;
- 32   FOR_INIT    -> ;
+ 32   FOR_INIT    -> TYPE id VAR_DEF ;
+ 33   FOR_INIT    -> id = EXPR ;
+ 34   FOR_INIT    -> ;
 
- 33   EXPR_OPT    -> EXPR
- 34   EXPR_OPT    -> eps                          FOLLOW = { ; }
+ 35   EXPR_OPT    -> EXPR
+ 36   EXPR_OPT    -> eps                          FOLLOW = { ; }
 
- 35   FOR_ITER    -> id = EXPR
- 36   FOR_ITER    -> eps                          FOLLOW = { ) }
+ 37   FOR_ITER    -> id = EXPR
+ 38   FOR_ITER    -> eps                          FOLLOW = { ) }
 
- 37   ID_LIST     -> >> id ID_LIST
- 38   ID_LIST     -> ;                            FOLLOW after last id = { ; }
+ 39   ID_LIST     -> >> id ID_LIST
+ 40   ID_LIST     -> ;                            FOLLOW after last id = { ; }
 
- 39   COUT_TAIL   -> << EXPR COUT_TAIL
- 40   COUT_TAIL   -> ;
+ 41   COUT_TAIL   -> << EXPR COUT_TAIL
+ 42   COUT_TAIL   -> ;
 
- 41   TYPE        -> auto | int | double | string
+ 43   TYPE        -> auto | int | double | string
 
 Notes
   - if / while / for / do bodies are STAT, so a single statement or a block
@@ -105,6 +107,9 @@ Notes
   - for matches C-like optional parts: empty init, empty condition, empty
     increment. Increment, if present, is only id = EXPR (as implemented).
   - return may omit the expression (return ;).
+  - throw accepts an expression, but its runtime value must be string.
+  - catch accepts only a string variable. It catches explicit throws only;
+    interpreter errors such as division by zero remain process-level errors.
   - Empty statement ; is a no-op.
 
 
@@ -180,31 +185,33 @@ STAT            {                                 13
                 for                               17
                 while                             18
                 do                                19
-                return                            20
-                cin                               21
-                cout                              22
-                id                                23
-STAT_ID         =                                 24
-                (                                 25
-ELSE_OPT        else                              26
-                otherwise                         27
-VAR_DEF         =                                 29
-                ;                                 28
-FOR_INIT        auto int double string            30
-                id                                31
-                ;                                 32
-EXPR_OPT        FIRST(EXPR)                       33
+                try                               20
+                throw                             21
+                return                            22
+                cin                               23
+                cout                              24
+                id                                25
+STAT_ID         =                                 26
+                (                                 27
+ELSE_OPT        else                              28
+                otherwise                         29
+VAR_DEF         =                                 31
+                ;                                 30
+FOR_INIT        auto int double string            32
+                id                                33
                 ;                                 34
-FOR_ITER        id                                35
-                )                                 36
-ID_LIST         >>                                37
-                ;                                 38
-COUT_TAIL       <<                                39
+EXPR_OPT        FIRST(EXPR)                       35
+                ;                                 36
+FOR_ITER        id                                37
+                )                                 38
+ID_LIST         >>                                39
                 ;                                 40
-TYPE            auto / int / double / string      41
+COUT_TAIL       <<                                41
+                ;                                 42
+TYPE            auto / int / double / string      43
 
-FIRST(STAT) = { {  ;  auto int double string  if for while do return
-                 cin cout  id }
+FIRST(STAT) = { {  ;  auto int double string  if for while do try throw
+                 return cin cout  id }
 
 FIRST(EXPR) = { INT REAL STRING  id  (  -  ! }
 

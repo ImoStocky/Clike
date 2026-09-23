@@ -44,6 +44,9 @@ typedef enum token_kind_e
 	WHILE_KW,
 	DO_KW,
 	RETURN_KW,
+	TRY_KW,
+	CATCH_KW,
+	THROW_KW,
 
 	IDENT_TK,
 	INT_TK,

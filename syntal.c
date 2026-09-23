@@ -347,6 +347,36 @@ static ast_t *parse_do(void)
 	return n;
 }
 
+static ast_t *parse_try(void)
+{
+	ast_t *n = ast_new(AST_TRY);
+	next();
+	n->a = parse_stmt();
+	expect(CATCH_KW);
+	expect(BRACEL_OP);
+	if (tok.type != STRING_KW)
+		die(SYN_ERR);
+	n->dtype = TY_STRING;
+	next();
+	if (tok.type != IDENT_TK)
+		die(SYN_ERR);
+	n->name = tok.data.lit;
+	tok.data.lit = NULL;
+	next();
+	expect(BRACER_OP);
+	n->b = parse_stmt();
+	return n;
+}
+
+static ast_t *parse_throw(void)
+{
+	ast_t *n = ast_new(AST_THROW);
+	next();
+	n->a = parse_expr();
+	expect(SEMI_OP);
+	return n;
+}
+
 static ast_t *parse_cin(void)
 {
 	ast_t *n = ast_new(AST_CIN);
@@ -428,6 +458,10 @@ static ast_t *parse_stmt(void)
 		return parse_while();
 	if (tok.type == DO_KW)
 		return parse_do();
+	if (tok.type == TRY_KW)
+		return parse_try();
+	if (tok.type == THROW_KW)
+		return parse_throw();
 	if (tok.type == RETURN_KW)
 	{
 		ast_t *n = ast_new(AST_RETURN);
