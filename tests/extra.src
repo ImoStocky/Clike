@@ -1,0 +1,12 @@
+int main()
+{
+	double x = 1.5;
+	cout << x * 2 << "\n";
+	cout << (1 < 2 && 0 || 1) << "\n";
+	do
+	{
+		x = x - 1.0;
+	} while (x > 0.0);
+	cout << "done\n";
+	return 0;
+}

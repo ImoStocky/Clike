@@ -1,0 +1,42 @@
+LL gramatika																		
+0	<PROG>	->	<FUNC>	<PROG_N>														
+1	<PROG_N>	->	<FUNC>	<PROG_N>														
+2	<PROG_N>	->	eps															
+3	<FUNC>	->	<TYPE>	id	(	<FD_PARAM>	)	<FUNC_REST>										
+4	<FD_PARAM> 	->	eps															
+5	<FD_PARAM> 	->	<TYPE>	id	<FD_PARAM_N>													
+6	<FD_PARAM_N> 	->	,	<TYPE>	id	<FD_PARAM_N>												
+7	<FD_PARAM_N> 	->	eps															
+8	<FUNC_REST>	->	;															
+9	<FUNC_REST>	->	{	<STAT_BLOCK>	}													
+10	<STAT_BLOCK>	->	<STAT>	<STAT_N>														
+11	<STAT_BLOCK>	->	eps															
+12	<STAT_N>	->	eps															
+	<STAT_N>	->	<STAT>	<STAT_N>														
+																		
+13	<STAT>	->	<TYPE>	id	<VAR_DEF>	;												
+14	<STAT>	->	if	(	EXPR	)	<IF_BODY>											
+15	<STAT>	->	for	(	<TYPE>	id	=	EXPR	; 	EXPR	;	id	=	EXPR	)	{	<STAT_BLOCK>	}
+16	<STAT>	->	while	(	EXPR	)	{	<STAT_BLOCK>	}									
+17	<STAT>	->	do	{	<STAT_BLOCK>	}	while	(	EXPR	)	;							
+18	<STAT>	->	return	EXPR	;													
+19	<STAT>	->	id	=	EXPR													
+20	<STAT>	->	cin	>>	id	<ID_LIST>												
+21	<STAT>	->	cout	<<	EXPR	<COUT_EXPR_N>												
+22	<COUT_EXPR_N>	->	<<	EXPR	<COUT_EXPR_N>													
+23	<COUT_EXPR_N>	->	;															
+24	<ID_LIST>	->	>>	id	<ID_LIST>													
+25	<ID_LIST>	->	;															
+26	<IF_BODY>	->	EXPR	<ELSE_OR_NOT>														
+27	<IF_BODY>	->	{	<STAT_BLOCK>	}	<ELSE_OR_NOT>												
+28	<ELSE_OR_NOT>	->	else	<ELSE_BODY>														
+29	<ELSE_OR_NOT>	->	eps															
+30	<ELSE_BODY>	->	EXPR	;														
+31	<ELSE_BODY>	->	{	<STAT_BLOCK>	}													
+32	<VAR_DEF>	->	eps															
+33	<VAR_DEF>	->	=	EXPR														
+34	<TYPE> 	->	auto															
+35	<TYPE> 	->	int															
+36	<TYPE> 	->	double															
+37	<TYPE> 	->	string															
+
