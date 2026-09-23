@@ -1,14 +1,32 @@
 #include "ast.h"
+#include "compiler.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-ast_t *ast_new(ast_kind_t kind)
+ast_t *ast_try_body(ast_t *node)
+{
+	return node->a;
+}
+
+ast_t *ast_try_handler(ast_t *node)
+{
+	return node->b;
+}
+
+ast_t *ast_throw_expr(ast_t *node)
+{
+	return node->a;
+}
+
+ast_t *ast_new(compiler_t *c, ast_kind_t kind)
 {
 	ast_t *n = xmalloc(sizeof(*n));
 	memset(n, 0, sizeof(*n));
 	n->kind = kind;
 	n->dtype = TY_VOID;
+	n->track = c->nodes;
+	c->nodes = n;
 	return n;
 }
 

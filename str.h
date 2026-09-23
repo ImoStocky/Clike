@@ -1,4 +1,5 @@
-//hlavickovy soubor pro praci s nekonecne dlouhymi retezci
+#ifndef IFJ_STR_H
+#define IFJ_STR_H
 
 typedef struct
 {
@@ -22,3 +23,5 @@ int strGetLength(string *s);
 
 void strToLower(string *s);
 int strInArray(void *array[], int size, void *lookfor);
+
+#endif

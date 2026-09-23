@@ -1,31 +1,32 @@
-#include "ast.h"
+#include "compiler.h"
 #include "interp.h"
-#include "lexal.h"
 #include "syntal.h"
-#include "types.h"
 
 #include <stdio.h>
 
 int main(int argc, char **argv)
 {
-	FILE *in = stdin;
-	ast_t *prog;
+	compiler_t compiler;
+	errv_t status;
 
+	compiler_init(&compiler);
 	if (argc > 2)
 		return INTER_ERR;
 	if (argc == 2)
 	{
-		in = fopen(argv[1], "r");
-		if (in == NULL)
+		compiler.in = fopen(argv[1], "r");
+		if (compiler.in == NULL)
 			return INTER_ERR;
+		compiler.own_in = 1;
 	}
+	else
+		compiler.in = stdin;
 
-	scanner_init(in);
-	prog = parse_program();
-	interpret(prog);
-	ast_free(prog);
-	scanner_destroy();
-	if (in != stdin)
-		fclose(in);
-	return COMP_OK;
+	status = scanner_init(&compiler.scan, compiler.in);
+	if (status == COMP_OK)
+		status = parse_program(&compiler);
+	if (status == COMP_OK)
+		status = interpret(&compiler);
+	compiler_cleanup(&compiler);
+	return (int)status;
 }

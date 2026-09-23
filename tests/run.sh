@@ -28,7 +28,7 @@ for source in "$root"/tests/*.src; do
 		continue
 	fi
 
-	if [ "${IFJ_MEMCHECK:-0}" = 1 ] && [ "$expected_status" -eq 0 ]; then
+	if [ "${IFJ_MEMCHECK:-0}" = 1 ]; then
 		runner="valgrind --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=99 --quiet"
 	else
 		runner=

@@ -1,8 +1,8 @@
 #ifndef IFJ_SYNTAL_H
 #define IFJ_SYNTAL_H
 
-#include "ast.h"
+#include "compiler.h"
 
-ast_t *parse_program(void);
+errv_t parse_program(compiler_t *c);
 
 #endif

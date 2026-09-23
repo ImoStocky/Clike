@@ -1,8 +1,8 @@
 #ifndef IFJ_INTERP_H
 #define IFJ_INTERP_H
 
-#include "ast.h"
+#include "compiler.h"
 
-void interpret(ast_t *prog);
+errv_t interpret(compiler_t *c);
 
 #endif
