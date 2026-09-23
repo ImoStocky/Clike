@@ -1,0 +1,9 @@
+int main()
+{
+	int a;
+	double b;
+	string text;
+	cin >> a >> b >> text;
+	cout << a + b << " " << text << "\n";
+	return 0;
+}
