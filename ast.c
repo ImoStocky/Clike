@@ -1,5 +1,6 @@
 #include "ast.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 ast_t *ast_new(ast_kind_t kind)
@@ -22,4 +23,18 @@ void ast_append(ast_t **head, ast_t *node)
 	while (p->next != NULL)
 		p = p->next;
 	p->next = node;
+}
+
+void ast_free(ast_t *node)
+{
+	if (node == NULL)
+		return;
+	ast_free(node->a);
+	ast_free(node->b);
+	ast_free(node->c);
+	ast_free(node->d);
+	ast_free(node->next);
+	free(node->name);
+	free(node->sval);
+	free(node);
 }

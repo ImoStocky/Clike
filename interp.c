@@ -2,6 +2,7 @@
 #include "ial.h"
 #include "types.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,13 +26,14 @@ typedef enum flow_kind_e
 typedef struct exec_result_s
 {
 	flow_kind_t kind;
-	value_t value;
+	size_t slot;
 } exec_result_t;
 
 typedef struct frame_s
 {
 	htab_t *vars;
 	struct frame_s *parent;
+	size_t base;
 } frame_t;
 
 typedef struct func_s
@@ -43,6 +45,9 @@ typedef struct func_s
 
 static htab_t *functions;
 static frame_t *cur_frame;
+static value_t *ostack;
+static size_t otop;
+static size_t ocap;
 
 static value_t v_undef(void)
 {
@@ -86,54 +91,70 @@ static void value_destroy(value_t *v)
 	*v = v_undef();
 }
 
-static value_t value_move(value_t *v)
-{
-	value_t moved = *v;
-	*v = v_undef();
-	return moved;
-}
-
-static exec_result_t result_normal(value_t value)
+static exec_result_t result_none(void)
 {
 	exec_result_t result;
 	result.kind = FLOW_NORMAL;
-	result.value = value;
+	result.slot = (size_t)-1;
 	return result;
 }
 
-static exec_result_t result_flow(flow_kind_t kind, value_t value)
+static size_t ostack_push(value_t value)
+{
+	if (otop == ocap)
+	{
+		size_t ncap = ocap == 0 ? 32 : ocap * 2;
+		value_t *grown = realloc(ostack, ncap * sizeof(*ostack));
+		if (grown == NULL)
+			die(INTER_ERR);
+		ostack = grown;
+		ocap = ncap;
+	}
+	ostack[otop] = value;
+	return otop++;
+}
+
+static value_t ostack_take(size_t slot)
+{
+	value_t value = ostack[slot];
+	ostack[slot] = v_undef();
+	return value;
+}
+
+static void ostack_rewind(size_t marker)
+{
+	while (otop > marker)
+	{
+		otop--;
+		value_destroy(&ostack[otop]);
+	}
+}
+
+static exec_result_t result_value(flow_kind_t kind, value_t value)
 {
 	exec_result_t result;
 	result.kind = kind;
-	result.value = value;
+	result.slot = ostack_push(value);
 	return result;
 }
 
-static value_t *val_new(value_t src)
+static void *slot_ptr(size_t slot)
 {
-	value_t *p = xmalloc(sizeof(*p));
-	*p = src;
-	if (src.type == TY_STRING && src.s != NULL)
-		p->s = xstrdup(src.s);
-	return p;
+	return (void *)(uintptr_t)(slot + 1);
 }
 
-static void val_free(void *p)
+static size_t ptr_slot(void *ptr)
 {
-	value_t *v = p;
-	if (v == NULL)
-		return;
-	if (v->type == TY_STRING)
-		free(v->s);
-	free(v);
+	return (size_t)(uintptr_t)ptr - 1;
 }
 
-static frame_t *frame_push(frame_t *parent)
+static frame_t *frame_push(frame_t *parent, size_t base)
 {
 	frame_t *f = xmalloc(sizeof(*f));
 	memset(f, 0, sizeof(*f));
 	f->vars = htab_init(32);
 	f->parent = parent;
+	f->base = base;
 	cur_frame = f;
 	return f;
 }
@@ -141,20 +162,44 @@ static frame_t *frame_push(frame_t *parent)
 static void frame_pop(frame_t *f)
 {
 	cur_frame = f->parent;
-	htab_free(f->vars, val_free);
+	htab_free(f->vars, NULL);
 	free(f);
 }
 
-static value_t *lookup_var(frame_t *f, const char *name)
+static exec_result_t frame_leave(frame_t *frame, exec_result_t result)
 {
-	while (f != NULL)
+	if (result.kind != FLOW_NORMAL)
 	{
-		value_t *v = htab_get(f->vars, name);
-		if (v != NULL)
-			return v;
-		f = f->parent;
+		value_t saved = ostack_take(result.slot);
+		ostack_rewind(frame->base);
+		result.slot = ostack_push(saved);
 	}
-	return NULL;
+	else
+		ostack_rewind(frame->base);
+	frame_pop(frame);
+	return result;
+}
+
+static int lookup_slot(frame_t *frame, const char *name, size_t *slot)
+{
+	while (frame != NULL)
+	{
+		void *found = htab_get(frame->vars, name);
+		if (found != NULL)
+		{
+			*slot = ptr_slot(found);
+			return 1;
+		}
+		frame = frame->parent;
+	}
+	return 0;
+}
+
+static void bind_slot(frame_t *frame, const char *name, size_t slot)
+{
+	if (htab_get(frame->vars, name) != NULL ||
+		htab_put(frame->vars, name, slot_ptr(slot)))
+		die(SEM_ERR);
 }
 
 static int truthy(value_t v)
@@ -315,22 +360,17 @@ static int count_list(ast_t *n)
 	return c;
 }
 
-static void destroy_values(value_t *values, int n)
-{
-	int i;
-	for (i = 0; i < n; i++)
-		value_destroy(&values[i]);
-}
-
 static exec_result_t exec_call(ast_t *call)
 {
 	func_t *fn;
-	value_t args[32];
-	int n = 0;
-	ast_t *p;
-	frame_t *fr;
 	ast_t *param;
+	ast_t *arg;
+	frame_t *caller;
+	frame_t *frame;
 	exec_result_t result;
+	size_t arg_base = otop;
+	int n = 0;
+	int i;
 
 	if (call->name == NULL)
 		die(SEM_ERR);
@@ -338,104 +378,108 @@ static exec_result_t exec_call(ast_t *call)
 	if (fn == NULL)
 		die(SEM_ERR);
 
-	for (p = call->a; p != NULL; p = p->next)
+	for (arg = call->a; arg != NULL; arg = arg->next)
 	{
-		exec_result_t arg;
-		if (n >= 32)
-			die(SEM_OTHER_ERR);
-		arg = eval_expr(p);
-		if (arg.kind == FLOW_THROW)
+		result = eval_expr(arg);
+		if (result.kind == FLOW_THROW)
 		{
-			destroy_values(args, n);
-			return arg;
+			value_t thrown = ostack_take(result.slot);
+			ostack_rewind(arg_base);
+			return result_value(FLOW_THROW, thrown);
 		}
-		args[n++] = value_move(&arg.value);
+		n++;
+		if (n > 32)
+			die(SEM_OTHER_ERR);
 	}
 
 	if (fn->native)
 	{
 		value_t out = v_undef();
-		int error = fn->nat(args, n, &out);
-		destroy_values(args, n);
+		int error = fn->nat(ostack + arg_base, n, &out);
+		ostack_rewind(arg_base);
 		if (error != 0)
 			die(SEM_TYPE_ERR);
-		return result_normal(out);
+		return result_value(FLOW_NORMAL, out);
 	}
-
 	if (fn->def == NULL || fn->def->b == NULL)
 		die(SEM_ERR);
 	if (count_list(fn->def->a) != n)
 		die(SEM_TYPE_ERR);
 
+	param = fn->def->a;
+	for (i = 0; i < n; i++)
 	{
-		frame_t *caller = cur_frame;
-		int i;
-		fr = frame_push(NULL);
-		param = fn->def->a;
-		for (i = 0; i < n; i++)
-		{
-			value_t slot;
-			memset(&slot, 0, sizeof(slot));
-			slot.type = param->dtype;
-			assign_into(&slot, args[i]);
-			if (htab_put(fr->vars, param->name, val_new(slot)))
-				die(SEM_ERR);
-			value_destroy(&slot);
-			param = param->next;
-		}
-		destroy_values(args, n);
-
-		result = exec_stmt(fn->def->b);
-		frame_pop(fr);
-		cur_frame = caller;
+		value_t slot = v_undef();
+		slot.type = param->dtype;
+		assign_into(&slot, ostack[arg_base + (size_t)i]);
+		value_destroy(&ostack[arg_base + (size_t)i]);
+		ostack[arg_base + (size_t)i] = slot;
+		param = param->next;
 	}
 
+	caller = cur_frame;
+	frame = frame_push(NULL, arg_base);
+	param = fn->def->a;
+	for (i = 0; i < n; i++)
+	{
+		bind_slot(frame, param->name, arg_base + (size_t)i);
+		param = param->next;
+	}
+	result = frame_leave(frame, exec_stmt(fn->def->b));
+	cur_frame = caller;
 	if (result.kind == FLOW_RETURN)
 		result.kind = FLOW_NORMAL;
+	else if (result.kind == FLOW_NORMAL)
+		result = result_value(FLOW_NORMAL, v_undef());
 	return result;
 }
 
 static exec_result_t eval_expr(ast_t *n)
 {
+	size_t marker;
+	exec_result_t left;
+	exec_result_t right;
+	value_t out;
+	int condition;
+
 	if (n == NULL)
 		die(SYN_ERR);
 	switch (n->kind)
 	{
 	case AST_INT:
-		return result_normal(v_int(n->ival));
+		return result_value(FLOW_NORMAL, v_int(n->ival));
 	case AST_DOUBLE:
-		return result_normal(v_double(n->dval));
+		return result_value(FLOW_NORMAL, v_double(n->dval));
 	case AST_STRING:
-		return result_normal(v_string(xstrdup(n->sval ? n->sval : "")));
+		return result_value(FLOW_NORMAL, v_string(xstrdup(n->sval ? n->sval : "")));
 	case AST_IDENT:
 	{
-		value_t *v = lookup_var(cur_frame, n->name);
+		size_t slot;
 		value_t copy;
-		if (v == NULL)
+		if (!lookup_slot(cur_frame, n->name, &slot))
 			die(SEM_ERR);
-		if (!v->init)
+		if (!ostack[slot].init)
 			die(RT_NO_INIT_ERR);
-		copy = *v;
-		if (v->type == TY_STRING)
-			copy.s = xstrdup(v->s ? v->s : "");
-		return result_normal(copy);
+		copy = ostack[slot];
+		if (copy.type == TY_STRING)
+			copy.s = xstrdup(copy.s ? copy.s : "");
+		return result_value(FLOW_NORMAL, copy);
 	}
 	case AST_UNOP:
-	{
-		exec_result_t operand = eval_expr(n->a);
-		value_t out;
-		if (operand.kind == FLOW_THROW)
-			return operand;
+		marker = otop;
+		left = eval_expr(n->a);
+		if (left.kind == FLOW_THROW)
+			return left;
 		if (n->op == NOT_OP)
-			out = v_int(!truthy(operand.value));
+			out = v_int(!truthy(ostack[left.slot]));
 		else if (n->op == MINUS_OP)
 		{
-			if (!operand.value.init)
+			if (!ostack[left.slot].init)
 				die(RT_NO_INIT_ERR);
-			if (operand.value.type == TY_INT)
-				out = v_int(-operand.value.i);
-			else if (operand.value.type == TY_DOUBLE)
-				out = v_double(-operand.value.d);
+			if (ostack[left.slot].type == TY_INT)
+				out = v_int(-ostack[left.slot].i);
+			else if (ostack[left.slot].type == TY_DOUBLE)
+				out = v_double(-ostack[left.slot].d);
 			else
 				die(SEM_TYPE_ERR);
 		}
@@ -444,105 +488,87 @@ static exec_result_t eval_expr(ast_t *n)
 			die(SYN_ERR);
 			out = v_undef();
 		}
-		value_destroy(&operand.value);
-		return result_normal(out);
-	}
+		ostack_rewind(marker);
+		return result_value(FLOW_NORMAL, out);
 	case AST_BINOP:
-	{
-		exec_result_t left = eval_expr(n->a);
-		exec_result_t right;
-		value_t out;
-		int condition;
+		marker = otop;
+		left = eval_expr(n->a);
 		if (left.kind == FLOW_THROW)
 			return left;
-
-		if (n->op == AND_OP)
+		if (n->op == AND_OP || n->op == OR_OP)
 		{
-			condition = truthy(left.value);
-			value_destroy(&left.value);
-			if (!condition)
-				return result_normal(v_int(0));
+			condition = truthy(ostack[left.slot]);
+			ostack_rewind(marker);
+			if ((n->op == AND_OP && !condition) || (n->op == OR_OP && condition))
+				return result_value(FLOW_NORMAL, v_int(n->op == OR_OP));
 			right = eval_expr(n->b);
 			if (right.kind == FLOW_THROW)
 				return right;
-			out = v_int(truthy(right.value));
-			value_destroy(&right.value);
-			return result_normal(out);
+			condition = truthy(ostack[right.slot]);
+			ostack_rewind(right.slot);
+			return result_value(FLOW_NORMAL, v_int(condition));
 		}
-		if (n->op == OR_OP)
-		{
-			condition = truthy(left.value);
-			value_destroy(&left.value);
-			if (condition)
-				return result_normal(v_int(1));
-			right = eval_expr(n->b);
-			if (right.kind == FLOW_THROW)
-				return right;
-			out = v_int(truthy(right.value));
-			value_destroy(&right.value);
-			return result_normal(out);
-		}
-
 		right = eval_expr(n->b);
 		if (right.kind == FLOW_THROW)
 		{
-			value_destroy(&left.value);
-			return right;
+			value_t thrown = ostack_take(right.slot);
+			ostack_rewind(marker);
+			return result_value(FLOW_THROW, thrown);
 		}
-		out = num_bin(n->op, left.value, right.value);
-		value_destroy(&left.value);
-		value_destroy(&right.value);
-		return result_normal(out);
-	}
+		out = num_bin(n->op, ostack[left.slot], ostack[right.slot]);
+		ostack_rewind(marker);
+		return result_value(FLOW_NORMAL, out);
 	case AST_CALL:
-	{
-		exec_result_t result = exec_call(n);
-		if (result.kind == FLOW_THROW)
-			return result;
-		if (!result.value.init)
+		left = exec_call(n);
+		if (left.kind == FLOW_THROW)
+			return left;
+		if (!ostack[left.slot].init)
 			die(RT_NO_INIT_ERR);
-		return result;
-	}
+		return left;
 	default:
 		die(SYN_ERR);
 	}
-	return result_normal(v_undef());
+	return result_none();
 }
 
 static exec_result_t exec_vardecl(ast_t *n)
 {
 	value_t slot;
+	size_t index;
+	exec_result_t init;
+
+	if (htab_get(cur_frame->vars, n->name) != NULL)
+		die(SEM_ERR);
 	memset(&slot, 0, sizeof(slot));
 	slot.type = n->dtype;
+	index = ostack_push(slot);
+	bind_slot(cur_frame, n->name, index);
 	if (n->a != NULL)
 	{
-		exec_result_t init = eval_expr(n->a);
+		init = eval_expr(n->a);
 		if (init.kind == FLOW_THROW)
 			return init;
-		assign_into(&slot, init.value);
-		value_destroy(&init.value);
+		assign_into(&ostack[index], ostack[init.slot]);
+		ostack_rewind(init.slot);
 	}
 	else if (n->dtype == TY_AUTO)
 		die(AMB_TYPE_ERR);
-	if (htab_get(cur_frame->vars, n->name) != NULL)
-		die(SEM_ERR);
-	htab_put(cur_frame->vars, n->name, val_new(slot));
-	value_destroy(&slot);
-	return result_normal(v_undef());
+	return result_none();
 }
 
 static exec_result_t exec_assign(ast_t *n)
 {
-	value_t *dst = lookup_var(cur_frame, n->name);
+	size_t dst;
 	exec_result_t value;
-	if (dst == NULL)
+
+	if (!lookup_slot(cur_frame, n->name, &dst))
 		die(SEM_ERR);
 	value = eval_expr(n->a);
 	if (value.kind == FLOW_THROW)
 		return value;
-	assign_into(dst, value.value);
-	value_destroy(&value.value);
-	return result_normal(v_undef());
+	assign_into(&ostack[dst], ostack[value.slot]);
+	ostack_rewind(value.slot);
+	return result_none();
 }
 
 static exec_result_t exec_cin(ast_t *n)
@@ -550,40 +576,40 @@ static exec_result_t exec_cin(ast_t *n)
 	ast_t *id;
 	for (id = n->a; id != NULL; id = id->next)
 	{
-		value_t *dst = lookup_var(cur_frame, id->name);
-		if (dst == NULL)
+		size_t dst;
+		if (!lookup_slot(cur_frame, id->name, &dst))
 			die(SEM_ERR);
-		if (dst->type == TY_AUTO)
+		if (ostack[dst].type == TY_AUTO)
 			die(AMB_TYPE_ERR);
-		if (dst->type == TY_INT)
+		if (ostack[dst].type == TY_INT)
 		{
 			int x;
 			if (scanf("%d", &x) != 1)
 				die(RT_NUM_ERR);
-			dst->i = x;
-			dst->init = 1;
+			ostack[dst].i = x;
+			ostack[dst].init = 1;
 		}
-		else if (dst->type == TY_DOUBLE)
+		else if (ostack[dst].type == TY_DOUBLE)
 		{
 			double x;
 			if (scanf("%lf", &x) != 1)
 				die(RT_NUM_ERR);
-			dst->d = x;
-			dst->init = 1;
+			ostack[dst].d = x;
+			ostack[dst].init = 1;
 		}
-		else if (dst->type == TY_STRING)
+		else if (ostack[dst].type == TY_STRING)
 		{
 			char tmp[4096];
 			if (scanf("%4095s", tmp) != 1)
 				die(RT_NUM_ERR);
-			free(dst->s);
-			dst->s = xstrdup(tmp);
-			dst->init = 1;
+			free(ostack[dst].s);
+			ostack[dst].s = xstrdup(tmp);
+			ostack[dst].init = 1;
 		}
 		else
 			die(SEM_TYPE_ERR);
 	}
-	return result_normal(v_undef());
+	return result_none();
 }
 
 static exec_result_t exec_cout(ast_t *n)
@@ -592,40 +618,40 @@ static exec_result_t exec_cout(ast_t *n)
 	for (e = n->a; e != NULL; e = e->next)
 	{
 		exec_result_t result = eval_expr(e);
-		value_t *v;
+		value_t *value;
 		if (result.kind == FLOW_THROW)
 			return result;
-		v = &result.value;
-		if (!v->init)
+		value = &ostack[result.slot];
+		if (!value->init)
 			die(RT_NO_INIT_ERR);
-		if (v->type == TY_INT)
-			printf("%d", v->i);
-		else if (v->type == TY_DOUBLE)
-			printf("%g", v->d);
-		else if (v->type == TY_STRING)
-			fputs(v->s ? v->s : "", stdout);
+		if (value->type == TY_INT)
+			printf("%d", value->i);
+		else if (value->type == TY_DOUBLE)
+			printf("%g", value->d);
+		else if (value->type == TY_STRING)
+			fputs(value->s ? value->s : "", stdout);
 		else
 			die(SEM_TYPE_ERR);
-		value_destroy(v);
+		ostack_rewind(result.slot);
 	}
-	return result_normal(v_undef());
+	return result_none();
 }
 
 static exec_result_t exec_stmt(ast_t *n)
 {
+	exec_result_t result;
 	if (n == NULL)
-		return result_normal(v_undef());
+		return result_none();
 	switch (n->kind)
 	{
 	case AST_BLOCK:
 	{
-		frame_t *inner = frame_push(cur_frame);
-		ast_t *s;
-		exec_result_t result = result_normal(v_undef());
-		for (s = n->a; s != NULL && result.kind == FLOW_NORMAL; s = s->next)
-			result = exec_stmt(s);
-		frame_pop(inner);
-		return result;
+		frame_t *inner = frame_push(cur_frame, otop);
+		ast_t *statement;
+		result = result_none();
+		for (statement = n->a; statement != NULL && result.kind == FLOW_NORMAL; statement = statement->next)
+			result = exec_stmt(statement);
+		return frame_leave(inner, result);
 	}
 	case AST_VARDECL:
 		return exec_vardecl(n);
@@ -636,91 +662,83 @@ static exec_result_t exec_stmt(ast_t *n)
 	case AST_COUT:
 		return exec_cout(n);
 	case AST_RETURN:
-	{
-		if (n->a != NULL)
-		{
-			exec_result_t value = eval_expr(n->a);
-			if (value.kind == FLOW_THROW)
-				return value;
-			return result_flow(FLOW_RETURN, value_move(&value.value));
-		}
-		return result_flow(FLOW_RETURN, v_undef());
-	}
+		if (n->a == NULL)
+			return result_value(FLOW_RETURN, v_undef());
+		result = eval_expr(n->a);
+		if (result.kind == FLOW_NORMAL)
+			result.kind = FLOW_RETURN;
+		return result;
 	case AST_THROW:
-	{
-		exec_result_t value = eval_expr(n->a);
-		if (value.kind == FLOW_THROW)
-			return value;
-		if (!value.value.init)
+		result = eval_expr(n->a);
+		if (result.kind == FLOW_THROW)
+			return result;
+		if (!ostack[result.slot].init)
 			die(RT_NO_INIT_ERR);
-		if (value.value.type != TY_STRING)
+		if (ostack[result.slot].type != TY_STRING)
 		{
-			value_destroy(&value.value);
+			ostack_rewind(result.slot);
 			die(SEM_TYPE_ERR);
 		}
-		return result_flow(FLOW_THROW, value_move(&value.value));
-	}
+		result.kind = FLOW_THROW;
+		return result;
 	case AST_TRY:
-	{
-		exec_result_t result = exec_stmt(n->a);
+		result = exec_stmt(n->a);
 		if (result.kind == FLOW_THROW)
 		{
-			frame_t *catch_frame = frame_push(cur_frame);
-			value_t *caught = xmalloc(sizeof(*caught));
-			*caught = value_move(&result.value);
-			if (htab_put(catch_frame->vars, n->name, caught))
-				die(SEM_ERR);
-			result = exec_stmt(n->b);
-			frame_pop(catch_frame);
+			value_t thrown = ostack_take(result.slot);
+			frame_t *catch_frame;
+			size_t base;
+			ostack_rewind(result.slot);
+			base = otop;
+			catch_frame = frame_push(cur_frame, base);
+			bind_slot(catch_frame, n->name, ostack_push(thrown));
+			result = frame_leave(catch_frame, exec_stmt(n->b));
 		}
 		return result;
-	}
 	case AST_IF:
 	{
-		exec_result_t condition = eval_expr(n->a);
 		int take_then;
-		if (condition.kind == FLOW_THROW)
-			return condition;
-		take_then = truthy(condition.value);
-		value_destroy(&condition.value);
+		result = eval_expr(n->a);
+		if (result.kind == FLOW_THROW)
+			return result;
+		take_then = truthy(ostack[result.slot]);
+		ostack_rewind(result.slot);
 		return exec_stmt(take_then ? n->b : n->c);
 	}
 	case AST_WHILE:
 		for (;;)
 		{
-			exec_result_t condition = eval_expr(n->a);
-			exec_result_t body;
 			int keep_going;
-			if (condition.kind == FLOW_THROW)
-				return condition;
-			keep_going = truthy(condition.value);
-			value_destroy(&condition.value);
+			result = eval_expr(n->a);
+			if (result.kind == FLOW_THROW)
+				return result;
+			keep_going = truthy(ostack[result.slot]);
+			ostack_rewind(result.slot);
 			if (!keep_going)
-				return result_normal(v_undef());
-			body = exec_stmt(n->b);
-			if (body.kind != FLOW_NORMAL)
-				return body;
+				return result_none();
+			result = exec_stmt(n->b);
+			if (result.kind != FLOW_NORMAL)
+				return result;
 		}
 	case AST_DO:
 		for (;;)
 		{
-			exec_result_t body = exec_stmt(n->a);
-			exec_result_t condition;
 			int keep_going;
-			if (body.kind != FLOW_NORMAL)
-				return body;
-			condition = eval_expr(n->b);
-			if (condition.kind == FLOW_THROW)
-				return condition;
-			keep_going = truthy(condition.value);
-			value_destroy(&condition.value);
+			result = exec_stmt(n->a);
+			if (result.kind != FLOW_NORMAL)
+				return result;
+			result = eval_expr(n->b);
+			if (result.kind == FLOW_THROW)
+				return result;
+			keep_going = truthy(ostack[result.slot]);
+			ostack_rewind(result.slot);
 			if (!keep_going)
-				return result_normal(v_undef());
+				return result_none();
 		}
 	case AST_FOR:
 	{
-		frame_t *inner = frame_push(cur_frame);
-		exec_result_t result = result_normal(v_undef());
+		frame_t *inner = frame_push(cur_frame, otop);
+		result = result_none();
 		if (n->a != NULL)
 			result = exec_stmt(n->a);
 		while (result.kind == FLOW_NORMAL)
@@ -734,8 +752,8 @@ static exec_result_t exec_stmt(ast_t *n)
 					result = condition;
 					break;
 				}
-				keep_going = truthy(condition.value);
-				value_destroy(&condition.value);
+				keep_going = truthy(ostack[condition.slot]);
+				ostack_rewind(condition.slot);
 				if (!keep_going)
 					break;
 			}
@@ -745,25 +763,22 @@ static exec_result_t exec_stmt(ast_t *n)
 			if (n->c != NULL)
 				result = exec_stmt(n->c);
 		}
-		frame_pop(inner);
-		return result;
+		return frame_leave(inner, result);
 	}
 	case AST_EXPRSTMT:
 		if (n->a != NULL)
 		{
-			exec_result_t result = n->a->kind == AST_CALL
-				? exec_call(n->a) : eval_expr(n->a);
+			result = n->a->kind == AST_CALL ? exec_call(n->a) : eval_expr(n->a);
 			if (result.kind == FLOW_THROW)
 				return result;
-			value_destroy(&result.value);
+			ostack_rewind(result.slot);
 		}
-		return result_normal(v_undef());
+		return result_none();
 	default:
 		die(SYN_ERR);
 	}
-	return result_normal(v_undef());
+	return result_none();
 }
-
 static int nat_length(value_t *args, int n, value_t *out)
 {
 	if (n != 1 || args[0].type != TY_STRING || !args[0].init)
@@ -835,6 +850,11 @@ static int nat_sort(value_t *args, int n, value_t *out)
 	return 0;
 }
 
+static void func_free(void *func)
+{
+	free(func);
+}
+
 static void add_native(const char *name, int (*fn)(value_t *, int, value_t *))
 {
 	func_t *f = xmalloc(sizeof(*f));
@@ -871,6 +891,9 @@ void interpret(ast_t *prog)
 	func_t *mainfn;
 	ast_t call;
 	exec_result_t result;
+	ostack = NULL;
+	otop = 0;
+	ocap = 0;
 	functions = htab_init(64);
 	add_native("length", nat_length);
 	add_native("concat", nat_concat);
@@ -893,8 +916,16 @@ void interpret(ast_t *prog)
 	result = exec_call(&call);
 	if (result.kind == FLOW_THROW)
 	{
-		value_destroy(&result.value);
+		ostack_rewind(0);
+		free(ostack);
+		ostack = NULL;
+		htab_free(functions, func_free);
+		functions = NULL;
 		die(RT_OTHER_ERR);
 	}
-	value_destroy(&result.value);
+	ostack_rewind(0);
+	free(ostack);
+	ostack = NULL;
+	htab_free(functions, func_free);
+	functions = NULL;
 }
