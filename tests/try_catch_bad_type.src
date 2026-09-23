@@ -1,0 +1,8 @@
+int main()
+{
+	try
+		throw "error";
+	catch (int error)
+		return 1;
+	return 0;
+}

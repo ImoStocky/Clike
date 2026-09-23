@@ -1,0 +1,50 @@
+int relay()
+{
+	try
+	{
+		throw "inner";
+	}
+	catch (string error)
+	{
+		throw error + " relayed";
+	}
+	return 0;
+}
+
+int return_from_try()
+{
+	try
+		return 5;
+	catch (string error)
+		return 0;
+}
+
+int main()
+{
+	try
+	{
+		cout << "before ";
+		relay();
+		cout << "bad\n";
+	}
+	catch (string error)
+		cout << error << "\n";
+
+	try
+		cout << "safe ";
+	catch (string error)
+		cout << "bad ";
+
+	try
+	{
+		try
+			throw "nearest";
+		catch (string error)
+			cout << error << " ";
+	}
+	catch (string error)
+		cout << "bad ";
+
+	cout << return_from_try() << "\n";
+	return 0;
+}
