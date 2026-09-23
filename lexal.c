@@ -1,744 +1,361 @@
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <limits.h>
-#include <string.h>
-#include <stdbool.h>
-#include <ctype.h>
-#include <stdint.h>
-
 #include "lexal.h"
+#include "str.h"
 #include "types.h"
 
-/**
-* Globalni promenna s aktualnim tokenem
-*/
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-token_t scanner;
+static FILE *sourceFile;
+static string buf;
+static int have_unread;
+static int unread_c;
 
-/**
-* Soubor, se kterym pracujem. Nastaven pri initu.
-*/
-FILE * sourceFile;
-
-/**
-* Aktualni pozice v souboru (pri chybe muze ukazat uzivateli radek chyby)
-*/
-static scannerLocation_s location;
-static scannerLocation_s previousLocation;
-
-static char c;
-static char prevC;
-
-static uint8_t position = 255;
-
-// buffer pro nazvy promennych a funkci, pripadne nacitani identifikatoru
-static string nameBuffer;
-static bool nameWasUsed = false;
-
-static string helperString;
-
-//static bool mustBeSpace = false;
-
-// vyskakovatko z whilu
-static bool canRun = true;
-
-// jsme treba uprostred stringu a vypadne eof - tak at muzem hlasit chybu
-static bool canBeEof = true;
-
-
-#define SCANNER_KEYWORDS_LENGTH 10
-static char * keywords[] = {
-		"auto",
-		"cin",
-		"cout",
-		"double",
-		"else",
-		"for",
-		"if",
-		"int",
-		"return",
-		"string"
-};
-
-void scanner_init(FILE*);
-int scanner_generateToken(token_t*);
-
-static void scanner_tokenReset(void);
-static void scanner_bufferPushBack(void);
-static void scanner_bufferPushBackPrevious(void);
-
-
-bool scanner_checkIdentifierChar(char c, bool first) {
-	// _, [a-z], [A-Z]
-	if(isalpha(c) || c == '_')
-	{
-		return true;
-	}
-
-	// kdyz to neni prvni znak, muze obsahovat i [0-9]
-	if( ! first) {
-		return (isdigit(c) > 0);
-	}
-
-	return false;
-}
-
-void scanner_addChar(char c) {
-	if(strAddChar(&nameBuffer, c))
-	{
-		//printf("- %c - ", c);
-		exit(INTER_ERR);
-	}
-}
-
-void scanner_saveStringToToken() {
-	scanner.data.lit = nameBuffer.str;
-	nameWasUsed = true;
-}
-
-int scanner_generateToken(token_t* tok)
+static int next_char(void)
 {
-	// reinicializace tokenu
-	scanner_tokenReset();
-
-	// pocatecni stav automatu
-	scannerStates_e readingState = S_START;
-
-	// kdyz byl buffer v predchozim kole pouzit, odalokujem a vycistime
-	if(nameWasUsed)
+	if (have_unread)
 	{
-		nameWasUsed = false;
-		// coz mozna nakonec delat nebudem, protoze by se ztratily data po nacteni tokenu
-		// jeste promyslet TODO
-		strClear(&nameBuffer);
-		//strFree(&nameBuffer);
+		have_unread = 0;
+		return unread_c;
 	}
-
-	// predchozi nacteny znak
-	prevC = 0;
-
-	// interni citac pro ruzne srandy
-	//unsigned int i = 0;
-
-	while(canRun && ((c = getc(sourceFile)) != EOF))
-	{
-		if(c == '\n')
-		{
-			previousLocation.X = location.X;
-			previousLocation.Y = location.Y;
-			location.Y = 1;
-			location.X += 1;
-		} else
-		{
-			previousLocation.Y = location.Y;
-			location.Y++;
-		}
-
-		switch(readingState)
-		{
-
-			case S_START:
-				// jednoduche tokeny
-				if(c == '+')
-				{
-					readingState = S_END;
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = PLUS_OP;
-				} else if(c == '-')
-				{
-					readingState = S_END;
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = MINUS_OP;
-				} else if(c == '*')
-				{
-					readingState = S_END;
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = ASTERISK_OP;
-				} else if(c == ';')
-				{
-					readingState = S_END;
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = SEMI_OP;
-				} else if(c == ',')
-				{
-					readingState = S_END;
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = COM_OP;
-				} else if(c == '(')
-				{
-					readingState = S_END;
-					scanner.type = BRACE_TK;
-					scanner.data.brct = BRACEL_OP;
-				} else if(c == ')')
-				{
-					readingState = S_END;
-					scanner.type = BRACE_TK;
-					scanner.data.brct = BRACER_OP;
-				}  else if(c == '{')
-				{
-					readingState = S_END;
-					scanner.type = BRACE_TK;
-					scanner.data.brct = BLOCKL_OP;
-				}  else if(c == '}')
-				{
-					readingState = S_END;
-					scanner.type = BRACE_TK;
-					scanner.data.brct = BLOCKR_OP;
-				}
-
-					// zacatek muze znamenat jiny token
-				else if(c == '/')
-				{
-					readingState = S_SLASH;
-				}
-				else if(c == '>')
-				{
-					readingState = S_GREATER;
-				} else if(c == '<')
-				{
-					readingState = S_LOWER;
-				} else if(c == '=')
-				{
-					readingState = S_ASSIGN;
-				}
-
-					// specialy a ostatni
-				else if(c == '!')
-				{
-					readingState = S_SCREAMER;
-					canBeEof = false;
-				} else if(c == '"')
-				{
-					readingState = S_STRING;
-					canBeEof = false;
-				}else if(isdigit(c)) {
-					/**
-					*  NUMBER
-					*/
-					readingState = S_INTEGER;
-					scanner.type = INT_TK;
-
-					scanner_addChar(c);
-					scanner_saveStringToToken();
-
-					canBeEof = false;
-				} else if(scanner_checkIdentifierChar(c, true)) // kdyz je to platny pocatecni znak identifikatoru
-				{
-					/**
-					*  IDENTIFIER / KEYWORD
-					*/
-					readingState = S_IDENTIFIER;
-					scanner.type = IDENT_TK;
-
-					scanner_addChar(c);
-					scanner_saveStringToToken();
-
-					canBeEof = false;
-				} else {
-					if(isspace(c)) {
-						readingState = S_START;
-					} else {
-						scanner.type = UNKNOWN_TK;
-						readingState = S_END;
-						canRun = false;
-					}
-				}
-
-				break;
-
-			case S_STRING:
-				if(c == '"') {
-					scanner.type = LITERAL_TK;
-
-					scanner_saveStringToToken();
-
-					readingState = S_END;
-					canRun = false;
-					canBeEof = true;
-
-				} else if(c == '\\') {
-					readingState = S_STRING_ESCAPE;
-				} else if(c > 31) {
-					scanner_addChar(c);
-				} else {
-					scanner.type = UNKNOWN_TK;
-					readingState = S_END;
-					canRun = false;
-				}
-				break;
-
-			case S_STRING_ESCAPE:
-
-				if(c == '"') {
-					readingState = S_STRING;
-					scanner_addChar(c);
-				} else if(c == 'n') {
-					readingState = S_STRING;
-					scanner_addChar('\n');
-				} else if(c == 't') {
-					readingState = S_STRING;
-					scanner_addChar('\t');
-				} else if(c == '\\') {
-					readingState = S_STRING;
-					scanner_addChar('\\');
-				} else if(c == 'x') {
-					readingState = S_STRING_ESCAPE_SEQ_START;
-				} else {
-					scanner.type = UNKNOWN_TK;
-					readingState = S_END;
-					canRun = false;
-				}
-
-				break;
-
-			case S_STRING_ESCAPE_SEQ_START:
-				// 0-9a-f
-				if(isdigit(c) || (tolower(c) >= 97 && tolower(c) <= 102)) {
-					strAddChar(&helperString, tolower(c));
-					readingState = S_STRING_ESCAPE_SEQ_END;
-				} else {
-					scanner.type = UNKNOWN_TK;
-					readingState = S_END;
-					canRun = false;
-				}
-
-				break;
-
-			case S_STRING_ESCAPE_SEQ_END:
-				// 0-9a-f
-				if(isdigit(c) || (tolower(c) >= 97 && tolower(c) <= 102)) {
-					strAddChar(&helperString, tolower(c));
-					readingState = S_STRING;
-
-					int number = (int)strtol(strGetStr(&helperString), NULL, 16);
-
-					scanner_addChar((char)number);
-
-					strClear(&helperString);
-				} else {
-					scanner.type = UNKNOWN_TK;
-					readingState = S_END;
-					canRun = false;
-				}
-				break;
-
-			case S_INTEGER:
-				if(isdigit(c)) {
-					readingState = S_INTEGER;
-					// ADD CHAR TO STR
-					scanner_addChar(c);
-				} else {
-					// MAYBE REAL
-					if(tolower(c) == 'e') {
-						readingState = S_REAL_PLUS_MINUS;
-						scanner_addChar(c);
-					} else if(c == '.') {
-						readingState = S_REAL_DOT_MUST_BE_NUMBER;
-						scanner_addChar(c);
-					} else {
-						if(scanner_checkIdentifierChar(c, true)) {
-							exit(LEX_ERR);
-						}
-
-						scanner_bufferPushBack();
-						scanner_saveStringToToken();
-
-						canRun = false;
-						canBeEof = true;
-						readingState = S_END;
-					}
-				}
-				break;
-
-			case S_REAL_DOT_MUST_BE_NUMBER:
-				if(isdigit(c)) {
-					readingState = S_REAL_DOT_NUMBERS;
-					scanner_addChar(c);
-					scanner.type = REAL_TK;
-				} else {
-					scanner.type = UNKNOWN_TK;
-					readingState = S_END;
-					canRun = false;
-				}
-
-				break;
-
-			case S_REAL_DOT_NUMBERS:
-				if(isdigit(c)) {
-					readingState = S_REAL_DOT_NUMBERS;
-					scanner_addChar(c);
-				} else if(tolower(c) == 'e') {
-					readingState = S_REAL_PLUS_MINUS;
-					scanner_addChar(c);
-				} else {
-					scanner.type = REAL_TK;
-
-					scanner_bufferPushBack();
-					scanner_saveStringToToken();
-
-					readingState = S_END;
-					canRun = false;
-				}
-				break;
-
-			case S_REAL_PLUS_MINUS:
-				if(c == '+' || c == '-' || isdigit(c)) {
-					readingState = S_REAL_E_ZERO_NUMBERS;
-					scanner_addChar(c);
-
-					if(isdigit(c)) {
-						scanner.type = REAL_TK;
-						readingState = S_REAL_E_NUMBERS;
-					}
-				} else {
-					scanner_bufferPushBack();
-					scanner_bufferPushBackPrevious();
-
-					scanner_saveStringToToken();
-
-					scanner.type = UNKNOWN_TK;
-					readingState = S_END;
-					canRun = false;
-					canBeEof = true;
-				}
-				break;
-
-			case S_REAL_E_NUMBERS:
-				if(isdigit(c))
-				{
-					readingState = S_REAL_E_NUMBERS;
-					scanner_addChar(c);
-				} else {
-					scanner_bufferPushBack();
-
-					scanner_saveStringToToken();
-
-					readingState = S_END;
-					canRun = false;
-					canBeEof = true;
-				}
-				break;
-
-			case S_REAL_E_ZERO_NUMBERS:
-				if(isdigit(c)) {
-					if(c == '0') {
-						readingState = S_REAL_E_ZERO_NUMBERS;
-						scanner.type = REAL_TK;
-					} else {
-						readingState = S_REAL_E_NUMBERS;
-						scanner_addChar(c);
-						scanner.type = REAL_TK;
-					}
-
-				} else {
-					scanner.type = UNKNOWN_TK;
-					readingState = S_END;
-					canRun = false;
-				}
-				break;
-
-			case S_IDENTIFIER:
-				if(scanner_checkIdentifierChar(c, false)) {
-					readingState = S_IDENTIFIER;
-					scanner_addChar(c);
-				} else {
-					scanner_bufferPushBack();
-
-					strToLower(&nameBuffer);
-
-					readingState = S_END;
-					canRun = false;
-					canBeEof = true;
-
-					if((position = strInArray((void **)keywords, SCANNER_KEYWORDS_LENGTH, strGetStr(&nameBuffer))) >= 0) {
-						switch(position) {
-							case 0 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = AUTO_KW;
-								break;
-
-							case 1 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = CIN_KW;
-								break;
-
-							case 2 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = COUT_KW;
-								break;
-
-							case 3 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = DOUBLE_KW;
-								break;
-
-							case 4 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = ELSE_KW;
-								break;
-							case 5 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = FOR_KW;
-								break;
-							case 6 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = IF_KW;
-								break;
-							case 7 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = INT_KW;
-								break;
-							case 8 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = RETURN_KW;
-								break;
-							case 9 :
-								scanner.type = KEYWORD_TK;
-								scanner.data.kwd = STRING_KW;
-								break;
-
-							default: break;
-						}
-					} else
-					{
-						// not keyword
-						scanner_saveStringToToken();
-					}
-				}
-				break;
-
-			case S_SLASH:
-				if(c == '/')
-				{
-					readingState = S_LINE_COMMENT;
-					canBeEof = true;
-				} else if(c == '*')
-				{
-					readingState = S_BLOCK_COMMENT;
-					canBeEof = false;
-
-				} else {
-					scanner.type = OPERATOR_TK;
-					scanner.data.kwd = SLASH_OP;
-
-					scanner_bufferPushBack();
-					readingState = S_END;
-					canRun = false;
-					canBeEof = true;
-				}
-				break;
-
-			case S_LINE_COMMENT:
-				if(c == '\n') {
-					readingState = S_START;
-				} else {
-					readingState = S_LINE_COMMENT;
-				}
-
-				break;
-
-			case S_BLOCK_COMMENT:
-				if(c == '*') {
-					readingState = S_BLOCK_COMMENT_STAR;
-				} else {
-					readingState = S_BLOCK_COMMENT;
-				}
-
-				break;
-
-			case S_BLOCK_COMMENT_STAR:
-				if(c == '/') {
-					readingState = S_START;
-					canBeEof = true;
-				} else {
-					readingState = S_BLOCK_COMMENT;
-					scanner_bufferPushBack();
-				}
-
-				break;
-
-			case S_SCREAMER:
-				if(c == '=')
-				{
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = NEQ_OP;
-				} else
-				{
-					scanner.type = UNKNOWN_TK;
-				}
-
-				readingState = S_END;
-				canRun = false;
-				canBeEof = true;
-				break;
-
-			case S_ASSIGN:
-				if(c == '=')
-				{
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = EQ_OP;
-				} else
-				{
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = ASSIGN_OP;
-
-					scanner_bufferPushBack();
-				}
-
-				readingState = S_END;
-				canRun = false;
-				canBeEof = true;
-				break;
-
-			case S_GREATER:
-				if(c == '=')
-				{
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = GRE_OP;
-				} else if(c == '>')
-				{
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = DBL_GRE_OP;
-				} else {
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = GREAT_OP;
-					scanner_bufferPushBack();
-				}
-
-				readingState = S_END;
-				canRun = false;
-				canBeEof = true;
-				break;
-
-			case S_LOWER:
-				if(c == '<')
-				{
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = DBL_LESS_OP;
-				} else if(c == '=')
-				{
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = LEE_OP;
-				} else
-				{
-					scanner.type = OPERATOR_TK;
-					scanner.data.oprtr = LESS_OP;
-					scanner_bufferPushBack();
-				}
-
-				readingState = S_END;
-				canRun = false;
-				canBeEof = true;
-				break;
-
-			case S_END:
-				scanner.type = UNKNOWN_TK;
-
-				canRun = false;
-
-				exit(LEX_ERR);
-				break;
-
-		}
-
-		if(readingState == S_END)
-		{
-			canRun = false;
-		}
-
-		prevC = c;
-	}
-
-	if(c == EOF)
-	{
-		strFree(&helperString);
-		strFree(&nameBuffer);
-
-		if (canBeEof)
-		{
-			scanner.type = UNKNOWN_TK;
-		} else
-		{
-			exit(LEX_ERR);
-		}
-	} else if(scanner.type == UNKNOWN_TK)
-	{
-		strFree(&helperString);
-		strFree(&nameBuffer);
-	}
-
-	canBeEof 	= true;
-	canRun 		= true;
-
-	position	= 255;
-
-	if(scanner.type == UNKNOWN_TK) {
-		return 1;
-	}
-
-	memcpy (tok, &scanner, sizeof (token_t));
-
-	if(scanner.type == INT_TK) {
-		tok->data.ord = atoi(scanner.data.lit);
-	} else if(scanner.type == REAL_TK) {
-		tok->data.real = atof(scanner.data.lit);
-	} else if(scanner.type == LITERAL_TK) {
-		strcpy(tok->data.lit, scanner.data.lit);
-	} else if(scanner.type == IDENT_TK) {
-		strcpy(tok->data.lit, scanner.data.lit);
-	}
-
-	// TODO identifikator patri do symbol table, ne literal
-	
-	return 0;
+	return getc(sourceFile);
 }
 
-
-scannerLocation_s * scanner_getLocation(void)
+static void push_char(int c)
 {
-	return &location;
+	if (c == EOF)
+		return;
+	have_unread = 1;
+	unread_c = c;
 }
 
-void scanner_init(FILE* file)
+static int hex_val(int c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+static token_kind_t keyword_kind(const char *s)
+{
+	if (strcmp(s, "auto") == 0) return AUTO_KW;
+	if (strcmp(s, "cin") == 0) return CIN_KW;
+	if (strcmp(s, "cout") == 0) return COUT_KW;
+	if (strcmp(s, "double") == 0) return DOUBLE_KW;
+	if (strcmp(s, "else") == 0) return ELSE_KW;
+	if (strcmp(s, "for") == 0) return FOR_KW;
+	if (strcmp(s, "if") == 0) return IF_KW;
+	if (strcmp(s, "int") == 0) return INT_KW;
+	if (strcmp(s, "return") == 0) return RETURN_KW;
+	if (strcmp(s, "string") == 0) return STRING_KW;
+	if (strcmp(s, "while") == 0) return WHILE_KW;
+	if (strcmp(s, "do") == 0) return DO_KW;
+	return IDENT_TK;
+}
+
+void scanner_init(FILE *file)
 {
 	sourceFile = file;
-
-	strInit(&nameBuffer);
-	strInit(&helperString);
-
-	scanner_tokenReset();
-
-	location.X = 1;
-	location.Y = 0;
-
-	previousLocation.X = location.X;
-	previousLocation.Y = location.Y;
+	have_unread = 0;
+	if (strInit(&buf) != 0)
+		die(INTER_ERR);
 }
 
-static void scanner_tokenReset(void)
+static void skip_line_comment(void)
 {
-	scanner.type = UNKNOWN_TK;
-}
-
-static void scanner_bufferPushBackPrevious(void)
-{
-	if(c != ' ')
+	int c;
+	for (;;)
 	{
-		ungetc(prevC, sourceFile);
-
-		location.X = previousLocation.X;
-		location.Y = previousLocation.Y;
+		c = next_char();
+		if (c == EOF || c == '\n')
+			return;
 	}
 }
 
-static void scanner_bufferPushBack(void)
+static void skip_block_comment(void)
 {
-	if(c != ' ')
+	int c;
+	int star = 0;
+	for (;;)
 	{
-		ungetc(c, sourceFile);
-
-		location.X = previousLocation.X;
-		location.Y = previousLocation.Y;
+		c = next_char();
+		if (c == EOF)
+			die(LEX_ERR);
+		if (star && c == '/')
+			return;
+		star = (c == '*');
 	}
+}
+
+int scanner_generateToken(token_t *tok)
+{
+	int c;
+
+	tok->type = END_TK;
+	tok->data.lit = NULL;
+
+	for (;;)
+	{
+		c = next_char();
+		if (c == EOF)
+		{
+			tok->type = END_TK;
+			return 0;
+		}
+		if (isspace(c))
+			continue;
+		if (c == '/')
+		{
+			int n = next_char();
+			if (n == '/')
+			{
+				skip_line_comment();
+				continue;
+			}
+			if (n == '*')
+			{
+				skip_block_comment();
+				continue;
+			}
+			push_char(n);
+			tok->type = SLASH_OP;
+			return 0;
+		}
+		break;
+	}
+
+	if (isalpha(c) || c == '_')
+	{
+		strClear(&buf);
+		if (strAddChar(&buf, (char)c) != 0)
+			die(INTER_ERR);
+		for (;;)
+		{
+			c = next_char();
+			if (!(isalnum(c) || c == '_'))
+			{
+				push_char(c);
+				break;
+			}
+			if (strAddChar(&buf, (char)c) != 0)
+				die(INTER_ERR);
+		}
+		tok->type = keyword_kind(buf.str);
+		if (tok->type == IDENT_TK)
+			tok->data.lit = xstrdup(buf.str);
+		return 0;
+	}
+
+	if (isdigit(c))
+	{
+		int is_real = 0;
+		strClear(&buf);
+		if (strAddChar(&buf, (char)c) != 0)
+			die(INTER_ERR);
+		for (;;)
+		{
+			c = next_char();
+			if (isdigit(c))
+			{
+				if (strAddChar(&buf, (char)c) != 0)
+					die(INTER_ERR);
+				continue;
+			}
+			break;
+		}
+		if (c == '.')
+		{
+			int d = next_char();
+			if (!isdigit(d))
+				die(LEX_ERR);
+			is_real = 1;
+			if (strAddChar(&buf, '.') != 0 || strAddChar(&buf, (char)d) != 0)
+				die(INTER_ERR);
+			for (;;)
+			{
+				c = next_char();
+				if (!isdigit(c))
+					break;
+				if (strAddChar(&buf, (char)c) != 0)
+					die(INTER_ERR);
+			}
+		}
+		if (c == 'e' || c == 'E')
+		{
+			int d;
+			is_real = 1;
+			if (strAddChar(&buf, (char)c) != 0)
+				die(INTER_ERR);
+			d = next_char();
+			if (d == '+' || d == '-')
+			{
+				if (strAddChar(&buf, (char)d) != 0)
+					die(INTER_ERR);
+				d = next_char();
+			}
+			if (!isdigit(d))
+				die(LEX_ERR);
+			if (strAddChar(&buf, (char)d) != 0)
+				die(INTER_ERR);
+			for (;;)
+			{
+				c = next_char();
+				if (!isdigit(c))
+					break;
+				if (strAddChar(&buf, (char)c) != 0)
+					die(INTER_ERR);
+			}
+			push_char(c);
+		}
+		else
+			push_char(c);
+
+		if (is_real)
+		{
+			tok->type = REAL_TK;
+			tok->data.real = atof(buf.str);
+		}
+		else
+		{
+			tok->type = INT_TK;
+			tok->data.ord = atoi(buf.str);
+		}
+		return 0;
+	}
+
+	if (c == '"')
+	{
+		strClear(&buf);
+		for (;;)
+		{
+			c = next_char();
+			if (c == EOF || c == '\n')
+				die(LEX_ERR);
+			if (c == '"')
+				break;
+			if (c == '\\')
+			{
+				int e = next_char();
+				if (e == 'n')
+					c = '\n';
+				else if (e == 't')
+					c = '\t';
+				else if (e == '\\')
+					c = '\\';
+				else if (e == '"')
+					c = '"';
+				else if (e == 'x')
+				{
+					int h1 = next_char();
+					int h2 = next_char();
+					int v1 = hex_val(h1);
+					int v2 = hex_val(h2);
+					if (v1 < 0 || v2 < 0)
+						die(LEX_ERR);
+					c = (v1 << 4) | v2;
+					if (c == 0)
+						die(LEX_ERR);
+				}
+				else
+					die(LEX_ERR);
+			}
+			else if (c < 32)
+				die(LEX_ERR);
+			if (strAddChar(&buf, (char)c) != 0)
+				die(INTER_ERR);
+		}
+		tok->type = LITERAL_TK;
+		tok->data.lit = xstrdup(buf.str);
+		return 0;
+	}
+
+	switch (c)
+	{
+	case '+': tok->type = PLUS_OP; return 0;
+	case '-': tok->type = MINUS_OP; return 0;
+	case '*': tok->type = ASTERISK_OP; return 0;
+	case '%': tok->type = PERCENT_OP; return 0;
+	case ';': tok->type = SEMI_OP; return 0;
+	case ',': tok->type = COM_OP; return 0;
+	case '(': tok->type = BRACEL_OP; return 0;
+	case ')': tok->type = BRACER_OP; return 0;
+	case '{': tok->type = BLOCKL_OP; return 0;
+	case '}': tok->type = BLOCKR_OP; return 0;
+	case '!':
+	{
+		int n = next_char();
+		if (n == '=')
+			tok->type = NEQ_OP;
+		else
+		{
+			push_char(n);
+			tok->type = NOT_OP;
+		}
+		return 0;
+	}
+	case '=':
+	{
+		int n = next_char();
+		if (n == '=')
+			tok->type = EQ_OP;
+		else
+		{
+			push_char(n);
+			tok->type = ASSIGN_OP;
+		}
+		return 0;
+	}
+	case '<':
+	{
+		int n = next_char();
+		if (n == '<')
+			tok->type = DBL_LESS_OP;
+		else if (n == '=')
+			tok->type = LEE_OP;
+		else
+		{
+			push_char(n);
+			tok->type = LESS_OP;
+		}
+		return 0;
+	}
+	case '>':
+	{
+		int n = next_char();
+		if (n == '>')
+			tok->type = DBL_GRE_OP;
+		else if (n == '=')
+			tok->type = GRE_OP;
+		else
+		{
+			push_char(n);
+			tok->type = GREAT_OP;
+		}
+		return 0;
+	}
+	case '&':
+	{
+		int n = next_char();
+		if (n != '&')
+			die(LEX_ERR);
+		tok->type = AND_OP;
+		return 0;
+	}
+	case '|':
+	{
+		int n = next_char();
+		if (n != '|')
+			die(LEX_ERR);
+		tok->type = OR_OP;
+		return 0;
+	}
+	default:
+		die(LEX_ERR);
+	}
+	return 1;
 }
