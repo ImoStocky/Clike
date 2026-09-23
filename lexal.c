@@ -69,6 +69,12 @@ void scanner_init(FILE *file)
 		die(INTER_ERR);
 }
 
+void scanner_destroy(void)
+{
+	strFree(&buf);
+	buf.str = NULL;
+}
+
 static void skip_line_comment(void)
 {
 	int c;

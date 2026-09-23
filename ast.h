@@ -48,5 +48,6 @@ typedef struct ast_s
 
 ast_t *ast_new(ast_kind_t kind);
 void ast_append(ast_t **head, ast_t *node);
+void ast_free(ast_t *node);
 
 #endif

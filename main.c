@@ -1,3 +1,4 @@
+#include "ast.h"
 #include "interp.h"
 #include "lexal.h"
 #include "syntal.h"
@@ -22,6 +23,8 @@ int main(int argc, char **argv)
 	scanner_init(in);
 	prog = parse_program();
 	interpret(prog);
+	ast_free(prog);
+	scanner_destroy();
 	if (in != stdin)
 		fclose(in);
 	return COMP_OK;

@@ -28,10 +28,16 @@ for source in "$root"/tests/*.src; do
 		continue
 	fi
 
-	if [ -f "$input" ]; then
-		"$ifj_bin" "$source" < "$input" > "$tmp"
+	if [ "${IFJ_MEMCHECK:-0}" = 1 ] && [ "$expected_status" -eq 0 ]; then
+		runner="valgrind --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=99 --quiet"
 	else
-		"$ifj_bin" "$source" < /dev/null > "$tmp"
+		runner=
+	fi
+
+	if [ -f "$input" ]; then
+		$runner "$ifj_bin" "$source" < "$input" > "$tmp"
+	else
+		$runner "$ifj_bin" "$source" < /dev/null > "$tmp"
 	fi
 	status=$?
 
