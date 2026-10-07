@@ -1,5 +1,5 @@
-#include "interp.h"
-#include "interp_priv.h"
+#include "interp/interp.h"
+#include "interp/interp_priv.h"
 
 #include <stdint.h>
 #include <stdio.h>

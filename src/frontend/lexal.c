@@ -1,6 +1,6 @@
-#include "lexal.h"
-#include "str.h"
-#include "types.h"
+#include "frontend/lexal.h"
+#include "util/str.h"
+#include "util/types.h"
 
 #include <ctype.h>
 #include <stdio.h>

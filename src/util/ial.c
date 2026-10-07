@@ -1,5 +1,5 @@
-#include "ial.h"
-#include "types.h"
+#include "util/ial.h"
+#include "util/types.h"
 
 #include <stdlib.h>
 #include <string.h>

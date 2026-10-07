@@ -2,7 +2,7 @@
 #define IFJ_INTERP_PRIV_H
 
 #include "compiler.h"
-#include "ial.h"
+#include "util/ial.h"
 
 typedef struct value_s
 {

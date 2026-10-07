@@ -1,8 +1,8 @@
 #ifndef IFJ_COMPILER_H
 #define IFJ_COMPILER_H
 
-#include "ast.h"
-#include "lexal.h"
+#include "frontend/ast.h"
+#include "frontend/lexal.h"
 
 struct compiler_s
 {

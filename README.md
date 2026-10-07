@@ -36,13 +36,13 @@ The full grammar is in `docs/grammar.txt`.
 source → scanner → parser → AST → sem_prepare → tree walk → exit code
 ```
 
-`main` owns one `compiler_t`: input file, scanner, current token, program node, and a list of every AST node allocated for that run. The scanner (`lexal.c`) yields one token at a time. Identifiers and string literals own a heap copy of their text. Keywords are case-sensitive.
+`main` owns one `compiler_t`: input file, scanner, current token, program node, and a list of every AST node allocated for that run. The scanner (`src/frontend/lexal.c`) yields one token at a time. Identifiers and string literals own a heap copy of their text. Keywords are case-sensitive.
 
-The parser (`syntal.c`) is recursive descent. Statements are LL(1). Expressions are precedence climbing. Each node is registered on the compiler as it is created, so a syntax error can still free nodes that never got linked into the tree.
+The parser (`src/frontend/syntal.c`) is recursive descent. Statements are LL(1). Expressions are precedence climbing. Each node is registered on the compiler as it is created, so a syntax error can still free nodes that never got linked into the tree.
 
-If the parse succeeds, `interpret` builds an `interp_t`, registers the five built-ins, then `sem_prepare` (`sem.c`) enters every function into a hash table. A second definition, a clash with a built-in name, a missing `main`, or a `main` with parameters fails before execution.
+If the parse succeeds, `interpret` builds an `interp_t`, registers the five built-ins, then `sem_prepare` (`src/interp/sem.c`) enters every function into a hash table. A second definition, a clash with a built-in name, a missing `main`, or a `main` with parameters fails before execution.
 
-Execution (`interp.c`) is one recursive walk. Each call returns a completion: normal, return, or throw. A return stops at the function that produced it. A throw walks out through blocks, loops, and calls until a `try` catches it or `main` ends. That is ordinary C control flow. `setjmp` is not used, because it would skip the stack and string cleanup on the way out.
+Execution (`src/interp/interp.c`) is one recursive walk. Each call returns a completion: normal, return, or throw. A return stops at the function that produced it. A throw walks out through blocks, loops, and calls until a `try` catches it or `main` ends. That is ordinary C control flow. `setjmp` is not used, because it would skip the stack and string cleanup on the way out.
 
 The first error is recorded on the compiler and later calls keep that code. `main` always runs `compiler_cleanup`, then returns the status. Allocation failure still aborts the process with code 99.
 
@@ -79,9 +79,11 @@ A slot index stays valid when the stack is reallocated. The symbol table stores 
 
 A frame records the stack index where its locals begin, plus a hash table from names to slots. Leaving a block rewinds the stack to that index and destroys string payloads above it. A return or throw lifts its value out, rewinds, then pushes the value back. A function frame has no parent, so `return` does not leak into the caller. The caller saves its own frame pointer and restores it after the call.
 
-The hash table (`ial.c`) is chained buckets. It holds functions for the whole program and variables for each frame. Function entries point at AST nodes they do not own. The compiler's node list owns the tree.
+The hash table (`src/util/ial.c`) is chained buckets. It holds functions for the whole program and variables for each frame. Function entries point at AST nodes they do not own. The compiler's node list owns the tree.
 
 ## Build and tests
+
+Sources live under `src/`. `util/` holds strings, types, and the hash table. `frontend/` holds the scanner, parser, and AST. `interp/` holds the tree walk, built-ins, and function table. `main.c` and the compiler session sit beside those directories.
 
 ```
 make            # build/ifj

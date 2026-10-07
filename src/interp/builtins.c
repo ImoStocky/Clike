@@ -1,4 +1,4 @@
-#include "interp_priv.h"
+#include "interp/interp_priv.h"
 
 #include <string.h>
 

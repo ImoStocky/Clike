@@ -1,7 +1,7 @@
 #ifndef IFJ_AST_H
 #define IFJ_AST_H
 
-#include "types.h"
+#include "util/types.h"
 
 typedef struct compiler_s compiler_t;
 

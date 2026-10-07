@@ -1,4 +1,4 @@
-#include "syntal.h"
+#include "frontend/syntal.h"
 #include "compiler.h"
 
 

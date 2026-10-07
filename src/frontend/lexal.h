@@ -2,8 +2,8 @@
 #define IFJ_LEXAL_H
 
 #include <stdio.h>
-#include "str.h"
-#include "types.h"
+#include "util/str.h"
+#include "util/types.h"
 
 typedef struct scanner_s
 {

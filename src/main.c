@@ -1,6 +1,6 @@
 #include "compiler.h"
-#include "interp.h"
-#include "syntal.h"
+#include "interp/interp.h"
+#include "frontend/syntal.h"
 
 #include <stdio.h>
 
